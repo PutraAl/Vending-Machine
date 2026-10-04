@@ -1,0 +1,60 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    container_name: vending-app
+    working_dir: /var/www/html
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/var/www/html
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    networks:
+      - vending-network
+
+  postgres:
+    image: postgres:16
+    container_name: vending-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vending_machine
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vending_machine"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - vending-network
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: vending-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    networks:
+      - vending-network
+
+volumes:
+  postgres_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  vending-network:
+    driver: bridge

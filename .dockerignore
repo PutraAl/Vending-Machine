@@ -1,0 +1,16 @@
+.git
+.gitignore
+
+backend/vendor
+backend/node_modules
+
+simulator/.venv
+simulator/__pycache__
+
+firmware/.pio
+
+.env
+.env.*
+!.env.example
+
+storage/logs
