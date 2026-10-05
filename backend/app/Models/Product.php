@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
+
 class Product extends Model
 {
     protected $fillable = [
@@ -17,10 +18,12 @@ class Product extends Model
         'is_active',
     ];
 
+
     protected $casts = [
         'price' => 'decimal:2',
         'is_active' => 'boolean',
     ];
+    
 
     public function category(): BelongsTo
     {
@@ -29,6 +32,7 @@ class Product extends Model
             'category_id'
         );
     }
+    
 
     public function machineSlots(): HasMany
     {

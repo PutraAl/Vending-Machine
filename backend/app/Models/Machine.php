@@ -3,7 +3,9 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use App\Models\Dispense;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Machine extends Model
 {
@@ -57,5 +59,10 @@ class Machine extends Model
             Dispense::class,
             'machine_id'
         );
+    }
+
+    public function latestTelemetry(): HasOne
+    {
+        return $this->hasOne(Telemetry::class)->latestOfMany('created_at');
     }
 }

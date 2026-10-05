@@ -35,4 +35,8 @@ return [
         ],
     ],
 
+    'payment_integration' => [
+        'token' => env('PAYMENT_INTEGRATION_TOKEN'),
+    ],
+
 ];
