@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    <title>@yield('title', 'Dashboard') · VendingOS</title>
+    <title>@yield('title', 'Dashboard') · vendingkan aja lah</title>
 
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 
