@@ -7,30 +7,36 @@ from mqtt.subscriber import MQTTSubscriber
 
 def main():
     mqtt_client = MQTTClient()
-
     mqtt_client.connect()
 
     publisher = MQTTPublisher(mqtt_client)
     subscriber = MQTTSubscriber(mqtt_client)
 
+    # Subscribe command dari backend
     subscriber.subscribe_commands()
 
+    # Beri waktu untuk memastikan subscription aktif
     time.sleep(1)
 
-    publisher.publish_status("IDLE")
-
-    publisher.publish_temperature(
-        temperature=72.5,
-        heater_on=True
+    # Initial machine state
+    publisher.publish_status(
+        state="IDLE"
     )
 
-    publisher.publish_stock(
+    # Initial temperature telemetry
+    publisher.publish_temperature(
+        temperature=72.5
+    )
+
+    # Initial inventory telemetry
+    publisher.publish_inventory(
         slot="A01",
         product="Nasi Goreng",
-        stock=5
+        current_qty=5
     )
 
     print("\n[SIMULATOR] Running...")
+    print("[SIMULATOR] Waiting for commands...")
     print("[SIMULATOR] Press CTRL+C to stop.")
 
     try:

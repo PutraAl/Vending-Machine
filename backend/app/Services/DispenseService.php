@@ -10,9 +10,13 @@ use Illuminate\Validation\ValidationException;
 
 class DispenseService
 {
+    public function __construct(
+        private readonly MqttService $mqttService
+    ) {}
+
     public function startDispense(Order $order): Dispense
     {
-        return DB::transaction(function () use ($order) {
+        $dispense = DB::transaction(function () use ($order) {
             $lockedOrder = Order::query()
                 ->whereKey($order->id)
                 ->lockForUpdate()
@@ -81,10 +85,10 @@ class DispenseService
                 ]);
             }
 
-            if ($slot->stock < $item->quantity) {
+            if ($slot->hold_qty < $item->quantity) {
                 throw ValidationException::withMessages([
                     'stock' => [
-                        'Insufficient stock for dispensing.',
+                        'The reserved stock for this order is no longer available.',
                     ],
                 ]);
             }
@@ -93,7 +97,8 @@ class DispenseService
                 'order_id' => $lockedOrder->id,
                 'machine_id' => $lockedOrder->machine_id,
                 'slot_id' => $slot->id,
-                'status' => 'PENDING',
+                'status' => 'DISPENSING',
+                'started_at' => now(),
             ]);
 
             $lockedOrder->update([
@@ -106,6 +111,24 @@ class DispenseService
                 'slot.product',
             ]);
         });
+
+        try {
+            $this->mqttService->publishDispenseCommand(
+                $dispense->id,
+                $dispense->slot->slot_code,
+                $dispense->order->items->first()->quantity
+            );
+        } catch (\Throwable $exception) {
+            try {
+                $this->failDispense($dispense);
+            } catch (\Throwable $failureException) {
+                report($failureException);
+            }
+
+            throw $exception;
+        }
+
+        return $dispense;
     }
 
     public function completeDispense(
@@ -155,16 +178,27 @@ class DispenseService
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($slot->stock < $item->quantity) {
+            if ($slot->hold_qty < $item->quantity) {
                 throw ValidationException::withMessages([
                     'stock' => [
-                        'Insufficient stock while completing dispense.',
+                        'Insufficient reserved stock while completing dispense.',
                     ],
                 ]);
             }
 
+            /*
+             * Physical stock leaves the machine here.
+             */
             $slot->decrement(
-                'stock',
+                'current_qty',
+                $item->quantity
+            );
+
+            /*
+             * Reservation is consumed here.
+             */
+            $slot->decrement(
+                'hold_qty',
                 $item->quantity
             );
 
@@ -214,6 +248,40 @@ class DispenseService
                         "Dispense cannot be failed from status {$lockedDispense->status}.",
                     ],
                 ]);
+            }
+
+            $lockedDispense->load('order.items');
+
+            $item = $lockedDispense->order
+                ->items
+                ->firstWhere(
+                    'slot_id',
+                    $lockedDispense->slot_id
+                );
+
+            if ($item) {
+                $slot = MachineSlot::query()
+                    ->whereKey($lockedDispense->slot_id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($slot) {
+                    /*
+                     * Product was not dispensed.
+                     * Release the reservation only.
+                     */
+                    $releaseQty = min(
+                        $slot->hold_qty,
+                        $item->quantity
+                    );
+
+                    if ($releaseQty > 0) {
+                        $slot->decrement(
+                            'hold_qty',
+                            $releaseQty
+                        );
+                    }
+                }
             }
 
             $lockedDispense->update([

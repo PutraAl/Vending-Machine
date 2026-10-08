@@ -41,8 +41,16 @@ class ProductController extends Controller
                 }
             )
             ->when(
-                $request->has('is_active'),
+                $request->user() === null,
+                function ($query) {
+                    // Kiosk/public hanya boleh melihat produk aktif.
+                    $query->where('is_active', true);
+                }
+            )
+            ->when(
+                $request->user() !== null && $request->has('is_active'),
                 function ($query) use ($request) {
+                    // User yang sudah login tetap bisa memakai filter is_active.
                     $query->where(
                         'is_active',
                         $request->boolean('is_active')

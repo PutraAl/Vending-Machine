@@ -47,7 +47,7 @@ class StoreMachineSlotRequest extends FormRequest
                 'min:1',
             ],
 
-            'stock' => [
+            'current_qty' => [
                 'required',
                 'integer',
                 'min:0',

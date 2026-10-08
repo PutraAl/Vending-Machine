@@ -1,43 +1,104 @@
-from mqtt.client import MQTTClient
+import json
+import os
 
 
 class MQTTPublisher:
     def __init__(self, mqtt_client):
         self.mqtt = mqtt_client
 
-    def publish_status(self, state):
+        self.machine_id = int(
+            os.getenv("MQTT_MACHINE_ID", "1")
+        )
+
+    def publish_status(
+        self,
+        state,
+        dispense_id=None,
+        slot=None,
+    ):
         topic = "vending/machine/status"
-        message = f'{{"state": "{state}"}}'
+
+        payload = {
+            "machine_id": self.machine_id,
+            "state": state,
+        }
+
+        if dispense_id is not None:
+            payload["dispense_id"] = dispense_id
+
+        if slot is not None:
+            payload["slot"] = slot
+
+        message = json.dumps(payload)
 
         self.mqtt.publish(topic, message)
 
-    def publish_temperature(self, temperature, heater_on):
+        print(
+            f"[MQTT] STATUS → {topic} | {message}"
+        )
+
+    def publish_temperature(self, temperature):
         topic = "vending/machine/temperature"
 
-        message = (
-            f'{{'
-            f'"temperature": {temperature}, '
-            f'"heater_on": {str(heater_on).lower()}'
-            f'}}'
-        )
+        payload = {
+            "machine_id": self.machine_id,
+            "temperature": temperature,
+        }
+
+        message = json.dumps(payload)
 
         self.mqtt.publish(topic, message)
 
-    def publish_stock(self, slot, product, stock):
-        topic = "vending/machine/stock"
-
-        message = (
-            f'{{'
-            f'"slot": "{slot}", '
-            f'"product": "{product}", '
-            f'"stock": {stock}'
-            f'}}'
+        print(
+            f"[MQTT] TEMPERATURE → {topic} | {message}"
         )
+
+    def publish_inventory(
+        self,
+        slot,
+        product,
+        current_qty,
+    ):
+        topic = "vending/machine/inventory"
+
+        payload = {
+            "machine_id": self.machine_id,
+            "slot": slot,
+            "product": product,
+            "current_qty": current_qty,
+        }
+
+        message = json.dumps(payload)
 
         self.mqtt.publish(topic, message)
 
-    def publish_error(self, error):
+        print(
+            f"[MQTT] INVENTORY → {topic} | {message}"
+        )
+
+    def publish_error(
+        self,
+        error,
+        dispense_id=None,
+        slot=None,
+    ):
         topic = "vending/machine/error"
-        message = f'{{"error": "{error}"}}'
+
+        payload = {
+            "machine_id": self.machine_id,
+            "error": error,
+        }
+
+        if dispense_id is not None:
+            payload["dispense_id"] = dispense_id
+
+        if slot is not None:
+            payload["slot"] = slot
+
+        message = json.dumps(payload)
 
         self.mqtt.publish(topic, message)
+
+        print(
+            f"[MQTT] ERROR → {topic} | {message}"
+        )

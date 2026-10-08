@@ -12,13 +12,15 @@ class MachineSlot extends Model
         'machine_id',
         'product_id',
         'slot_code',
-        'stock',
         'capacity',
+        'current_qty',
+        'hold_qty',
     ];
 
     protected $casts = [
-        'stock' => 'integer',
         'capacity' => 'integer',
+        'current_qty' => 'integer',
+        'hold_qty' => 'integer',
     ];
 
     public function machine(): BelongsTo
@@ -51,5 +53,10 @@ class MachineSlot extends Model
             Dispense::class,
             'slot_id'
         );
+    }
+
+    public function availableQuantity(): int
+    {
+        return max(0, $this->current_qty - $this->hold_qty);
     }
 }

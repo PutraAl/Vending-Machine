@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\Machine;
 use App\Models\MachineSlot;
 use App\Models\Order;
+use App\Models\Payment;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -20,7 +22,7 @@ class OrderService
         ) {
             $slotIds = collect($items)
                 ->pluck('slot_id')
-                ->map(fn($id) => (int) $id);
+                ->map(fn ($id) => (int) $id);
 
             if ($slotIds->duplicates()->isNotEmpty()) {
                 throw ValidationException::withMessages([
@@ -30,8 +32,9 @@ class OrderService
                 ]);
             }
 
-            $machine = \App\Models\Machine::query()
+            $machine = Machine::query()
                 ->whereKey($machineId)
+                ->lockForUpdate()
                 ->first();
 
             if (! $machine) {
@@ -95,10 +98,12 @@ class OrderService
                     ]);
                 }
 
-                if ($slot->stock < $quantity) {
+                $availableQty = $slot->availableQuantity();
+
+                if ($availableQty < $quantity) {
                     throw ValidationException::withMessages([
                         'items' => [
-                            "Insufficient stock for slot {$slot->slot_code}.",
+                            "Insufficient available stock for slot {$slot->slot_code}.",
                         ],
                     ]);
                 }
@@ -115,6 +120,9 @@ class OrderService
                 ];
 
                 $totalAmount += $subtotal;
+
+                // Reserve the physical stock for this order.
+                $slot->increment('hold_qty', $quantity);
             }
 
             $order = Order::create([
@@ -173,6 +181,8 @@ class OrderService
                 ]);
             }
 
+            $order->load('items');
+
             foreach ($order->items as $item) {
                 $slot = MachineSlot::query()
                     ->whereKey($item->slot_id)
@@ -180,14 +190,55 @@ class OrderService
                     ->lockForUpdate()
                     ->first();
 
-                if (! $slot || $slot->stock < $item->quantity) {
+                if (! $slot) {
                     throw ValidationException::withMessages([
                         'order_code' => [
-                            'Insufficient stock to continue this order.',
+                            "Machine slot {$item->slot_id} was not found.",
+                        ],
+                    ]);
+                }
+
+                if ($slot->hold_qty < $item->quantity) {
+                    throw ValidationException::withMessages([
+                        'order_code' => [
+                            "Stock reservation for slot {$slot->slot_code} is no longer available.",
                         ],
                     ]);
                 }
             }
+
+            /*
+             * paymentReference is used as the idempotency key.
+             *
+             * The same key must not be reused for a different order.
+             */
+            $existingPayment = Payment::query()
+                ->where('idempotency_key', $paymentReference)
+                ->lockForUpdate()
+                ->first();
+
+            if ($existingPayment) {
+                if ((int) $existingPayment->order_id !== (int) $order->id) {
+                    throw ValidationException::withMessages([
+                        'payment_reference' => [
+                            'This payment reference has already been used for another order.',
+                        ],
+                    ]);
+                }
+
+                // Idempotent retry: return the already-confirmed order.
+                return $order->fresh([
+                    'machine',
+                    'items.product',
+                    'items.slot',
+                    'payment',
+                ]);
+            }
+
+            Payment::create([
+                'order_id' => $order->id,
+                'idempotency_key' => $paymentReference,
+            ]);
 
             $order->update([
                 'status' => 'READY_TO_DISPENSE',
@@ -197,6 +248,7 @@ class OrderService
                 'machine',
                 'items.product',
                 'items.slot',
+                'payment',
             ]);
         });
     }

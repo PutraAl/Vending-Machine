@@ -16,14 +16,16 @@ class Product extends Model
         'price',
         'image',
         'is_active',
+        'is_simulated',
     ];
 
 
     protected $casts = [
         'price' => 'decimal:2',
         'is_active' => 'boolean',
+         'is_simulated' => 'boolean',
     ];
-    
+
 
     public function category(): BelongsTo
     {
@@ -32,7 +34,7 @@ class Product extends Model
             'category_id'
         );
     }
-    
+
 
     public function machineSlots(): HasMany
     {

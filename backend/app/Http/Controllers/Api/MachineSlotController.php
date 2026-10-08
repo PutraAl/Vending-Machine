@@ -156,12 +156,12 @@ class MachineSlotController extends Controller
         Machine $machine,
         MachineSlot $slot
     ): JsonResponse {
-        $newStock = (int) $request->validated()['stock'];
+        $newCurrentQty = (int) $request->validated()['current_qty'];
 
         $updatedSlot = DB::transaction(function () use (
             $machine,
             $slot,
-            $newStock
+            $newCurrentQty
         ) {
             $lockedSlot = MachineSlot::query()
                 ->where('machine_id', $machine->id)
@@ -169,20 +169,37 @@ class MachineSlotController extends Controller
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            if ($newStock > $lockedSlot->capacity) {
+            if ($newCurrentQty > $lockedSlot->capacity) {
                 abort(response()->json([
                     'success' => false,
-                    'message' => 'Stock cannot exceed slot capacity.',
+                    'message' => 'Current quantity cannot exceed slot capacity.',
                     'errors' => [
-                        'stock' => [
-                            'Stock cannot exceed capacity.',
+                        'current_qty' => [
+                            'Current quantity cannot exceed capacity.',
+                        ],
+                    ],
+                ], 422));
+            }
+
+            /*
+         * current_qty = physical stock in the machine.
+         * hold_qty is reserved by active orders and must not
+         * be changed manually here.
+         */
+            if ($newCurrentQty < $lockedSlot->hold_qty) {
+                abort(response()->json([
+                    'success' => false,
+                    'message' => 'Current quantity cannot be lower than held quantity.',
+                    'errors' => [
+                        'current_qty' => [
+                            'Current quantity cannot be lower than hold quantity.',
                         ],
                     ],
                 ], 422));
             }
 
             $lockedSlot->update([
-                'stock' => $newStock,
+                'current_qty' => $newCurrentQty,
             ]);
 
             return $lockedSlot->fresh('product');
@@ -190,7 +207,7 @@ class MachineSlotController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Stock updated successfully',
+            'message' => 'Current stock updated successfully',
             'data' => $updatedSlot,
         ]);
     }

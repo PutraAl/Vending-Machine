@@ -15,16 +15,9 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'role' => RoleMiddleware::class,
-            'payment.integration' => \App\Http\Middleware\VerifyPaymentIntegrationToken::class,
         ]);
     })
-
-    // ->withMiddleware(function ($middleware) {
-    //     $middleware->alias([
-    //         'payment.integration' =>
-    //         \App\Http\Middleware\VerifyPaymentIntegrationToken::class,
-    //     ]);
-    // })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
-    })->create();
+    })
+    ->create();

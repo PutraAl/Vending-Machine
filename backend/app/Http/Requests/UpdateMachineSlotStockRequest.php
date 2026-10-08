@@ -18,7 +18,7 @@ class UpdateMachineSlotStockRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'stock' => [
+            'current_qty' => [
                 'required',
                 'integer',
                 'min:0',
