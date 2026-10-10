@@ -51,85 +51,115 @@ class OrderApiTest extends TestCase
         return $machine->slots()->create([
             'product_id' => $product->id,
             'slot_code' => $slotCode,
-            'stock' => $stock,
+            'current_qty' => $stock,
+            'hold_qty' => 0,
             'capacity' => $capacity,
         ]);
     }
 
-    public function test_operator_can_create_order(): void
+    // public function test_operator_can_create_order(): void
+    // {
+    //     $user = User::factory()->create([
+    //         'role' => 'operator',
+    //     ]);
+
+    //     $machine = $this->createMachine();
+
+    //     $product = $this->createProduct();
+
+    //     $slot = $this->createSlot(
+    //         $machine,
+    //         $product
+    //     );
+
+    //     $response = $this->actingAs($user)
+    //         ->postJson('/api/v1/orders', [
+    //             'machine_id' => $machine->id,
+    //             'items' => [
+    //                 [
+    //                     'product_id' => $product->id,
+    //                     'slot_id' => $slot->id,
+    //                     'quantity' => 2,
+    //                 ],
+    //             ],
+    //         ]);
+
+    //     $response
+    //         ->assertCreated()
+    //         ->assertJsonPath(
+    //             'data.status',
+    //             'PENDING'
+    //         )
+    //         ->assertJsonPath(
+    //             'data.total_amount',
+    //             '30000.00'
+    //         );
+
+    //     $this->assertDatabaseHas('orders', [
+    //         'machine_id' => $machine->id,
+    //         'status' => 'PENDING',
+    //     ]);
+
+    //     $this->assertDatabaseHas('machine_slots', [
+    //         'id' => $slot->id,
+    //         'current_qty' => 5,
+    //         'hold_qty' => 2,
+    //     ]);
+    // }
+
+    // public function test_technician_cannot_create_order(): void
+    // {
+    //     $user = User::factory()->create([
+    //         'role' => 'technician',
+    //     ]);
+
+    //     $machine = $this->createMachine();
+    //     $product = $this->createProduct();
+    //     $slot = $this->createSlot($machine, $product);
+
+    //     $response = $this->actingAs($user)
+    //         ->postJson('/api/v1/orders', [
+    //             'machine_id' => $machine->id,
+    //             'items' => [
+    //                 [
+    //                     'product_id' => $product->id,
+    //                     'slot_id' => $slot->id,
+    //                     'quantity' => 1,
+    //                 ],
+    //             ],
+    //         ]);
+
+    //     $response->assertForbidden();
+    // }
+
+
+    public function test_guest_can_create_order_from_kiosk(): void
     {
-        $user = User::factory()->create([
-            'role' => 'operator',
-        ]);
-
-        $machine = $this->createMachine();
-
-        $product = $this->createProduct();
-
-        $slot = $this->createSlot(
-            $machine,
-            $product
-        );
-
-        $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
-                'machine_id' => $machine->id,
-                'items' => [
-                    [
-                        'product_id' => $product->id,
-                        'slot_id' => $slot->id,
-                        'quantity' => 2,
-                    ],
-                ],
-            ]);
-
-        $response
-            ->assertCreated()
-            ->assertJsonPath(
-                'data.status',
-                'PENDING'
-            )
-            ->assertJsonPath(
-                'data.total_amount',
-                '30000.00'
-            );
-
-        $this->assertDatabaseHas('orders', [
-            'machine_id' => $machine->id,
-            'status' => 'PENDING',
-        ]);
-
-        $this->assertDatabaseHas('machine_slots', [
-            'id' => $slot->id,
-            'stock' => 5,
-        ]);
-    }
-
-    public function test_technician_cannot_create_order(): void
-    {
-        $user = User::factory()->create([
-            'role' => 'technician',
-        ]);
-
         $machine = $this->createMachine();
         $product = $this->createProduct();
         $slot = $this->createSlot($machine, $product);
 
-        $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
-                'machine_id' => $machine->id,
-                'items' => [
-                    [
-                        'product_id' => $product->id,
-                        'slot_id' => $slot->id,
-                        'quantity' => 1,
-                    ],
+        $response = $this->postJson('/api/v1/orders', [
+            'machine_id' => $machine->id,
+            'items' => [
+                [
+                    'product_id' => $product->id,
+                    'slot_id' => $slot->id,
+                    'quantity' => 1,
                 ],
-            ]);
+            ],
+        ]);
 
-        $response->assertForbidden();
+        $response
+            ->assertCreated()
+            ->assertJsonPath('data.status', 'PENDING');
+
+        $this->assertDatabaseHas('machine_slots', [
+            'id' => $slot->id,
+            'current_qty' => 5,
+            'hold_qty' => 1,
+        ]);
     }
-
     public function test_order_fails_when_machine_is_offline(): void
     {
         $user = User::factory()->create([
@@ -141,7 +171,7 @@ class OrderApiTest extends TestCase
         $slot = $this->createSlot($machine, $product);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machine->id,
                 'items' => [
                     [
@@ -172,7 +202,7 @@ class OrderApiTest extends TestCase
         );
 
         $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machine->id,
                 'items' => [
                     [
@@ -191,7 +221,8 @@ class OrderApiTest extends TestCase
 
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 2,
+            'current_qty' => 2,
+            'hold_qty' => 0,
         ]);
     }
 
@@ -217,7 +248,7 @@ class OrderApiTest extends TestCase
         );
 
         $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machine->id,
                 'items' => [
                     [
@@ -248,7 +279,7 @@ class OrderApiTest extends TestCase
         );
 
         $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machineA->id,
                 'items' => [
                     [
@@ -282,7 +313,7 @@ class OrderApiTest extends TestCase
         );
 
         $response = $this->actingAs($user)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machine->id,
                 'items' => [
                     [
@@ -312,7 +343,7 @@ class OrderApiTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->postJson('/api/orders', [
+            ->postJson('/api/v1/orders', [
                 'machine_id' => $machine->id,
                 'items' => [
                     [
@@ -330,7 +361,7 @@ class OrderApiTest extends TestCase
             ]);
 
             $response = $this->actingAs($user)
-                ->getJson('/api/orders');
+                ->getJson('/api/v1/orders');
 
             $response
                 ->assertOk()

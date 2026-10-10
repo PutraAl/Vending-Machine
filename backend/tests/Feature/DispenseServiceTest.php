@@ -41,7 +41,8 @@ class DispenseServiceTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
+            'hold_qty' => 1,
             'capacity' => 10,
         ]);
 
@@ -68,11 +69,16 @@ class DispenseServiceTest extends TestCase
 
         $service = app(DispenseService::class);
 
+        // Penyelesaian pertama harus mengurangi stok.
         $service->completeDispense($dispense);
+
+        // Retry untuk dispense yang sama tidak boleh mengurangi stok lagi.
+        $service->completeDispense($dispense->fresh());
 
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 4,
+            'current_qty' => 4,
+            'hold_qty' => 0,
         ]);
 
         $this->assertDatabaseHas('orders', [
@@ -111,7 +117,8 @@ class DispenseServiceTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
+            'hold_qty' => 1,
             'capacity' => 10,
         ]);
 
@@ -142,7 +149,8 @@ class DispenseServiceTest extends TestCase
 
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 5,
+            'current_qty' => 5,
+            'hold_qty' => 0,
         ]);
 
         $this->assertDatabaseHas('orders', [

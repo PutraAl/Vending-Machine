@@ -1,1228 +1,186 @@
-# API Specification
+# API Specification — Vending Machine
 
-## 1. Overview
+## 1. Status dokumen
 
-REST API digunakan sebagai jalur komunikasi utama antara Laravel Backend dengan client atau sistem lain.
+Dokumen ini adalah kontrak integrasi awal untuk backend Laravel, frontend kiosk, simulator, dan kelompok pembayaran. Nama path/field/status di bawah harus dibandingkan dengan route dan controller yang benar-benar tersedia. Jangan langsung mengubah API produksi hanya agar sesuai dokumen ini; sepakati perubahan dengan semua kelompok.
 
-API digunakan untuk:
+## 2. Prinsip API
 
-- Dashboard
-- Integrasi dengan kelompok lain
-- Product management
-- Machine management
-- Stock management
-- Order management
-- Machine monitoring
-- Dispensing
+- Prefix API Laravel lazimnya `/api`; path aktual harus dicek dengan `php artisan route:list --path=api`.
+- Format response JSON konsisten.
+- Endpoint yang mengubah data harus melakukan validasi dan authorization di server.
+- API katalog kiosk hanya mengekspos data produk yang diperlukan.
+- Status pembayaran harus diverifikasi dari sumber tepercaya; field `payment_status: paid` yang dikirim oleh browser/kiosk saja tidak cukup.
+- Request/event duplikat harus aman (idempotent), terutama callback pembayaran dan perintah dispensing.
+- Jangan bocorkan stack trace, credential, atau data internal.
 
-API tidak menangani:
+## 3. Endpoint fungsional
 
-- Payment processing
-- Payment gateway
-- AI nutritional analysis
+Nama di tabel ini menggambarkan interface yang disepakati secara konseptual. Konfirmasi path aktual sebelum dipakai tim lain.
 
-Payment hanya diintegrasikan melalui endpoint konfirmasi pembayaran.
+| Method | Path konseptual | Kegunaan | Akses |
+|---|---|---|---|
+| `GET` | `/api/products` | Daftar produk aktif untuk kiosk. | Public read terbatas atau token kiosk sesuai kebijakan deployment. |
+| `GET` | `/api/products/{id}` | Detail satu produk. | Public read terbatas atau token kiosk. |
+| `GET` | `/api/machine-status` | Status mesin/telemetry terbaru. | Token internal/role yang berwenang; batasi detail yang diekspos. |
+| `POST` | `/api/dispense` | Meminta backend memproses dispensing yang valid. | Token service/perangkat atau role yang berwenang; bukan endpoint tanpa proteksi. |
+| `GET` | `/api/machines/{machine}/status` | Alternatif status per mesin jika API mendukung banyak mesin. | Sesuai role/token. |
 
----
+Jika endpoint `/dispense` dan `/machine-status` sudah ada dengan path atau payload berbeda, dokumentasikan bentuk aktual dan pertahankan kompatibilitas sebelum mengubahnya.
 
-# 2. Base URL
-
-Development:
-
-```text
-http://localhost:8000/api
-```
-
-Contoh:
-
-```text
-http://localhost:8000/api/products
-```
-
-Production:
-
-```text
-https://<domain>/api
-```
-
----
-
-# 3. API Design Principles
-
-API menggunakan prinsip REST.
-
-### HTTP Methods
-
-| Method | Usage |
-|---|---|
-| GET | Mengambil data |
-| POST | Membuat data atau menjalankan action |
-| PUT | Memperbarui seluruh data |
-| PATCH | Memperbarui sebagian data |
-| DELETE | Menghapus data |
-
-### Response Format
-
-Response API menggunakan JSON.
-
-Contoh success:
-
-```json
-{
-    "success": true,
-    "message": "Data retrieved successfully",
-    "data": {}
-}
-```
-
-Contoh error:
-
-```json
-{
-    "success": false,
-    "message": "Validation failed",
-    "errors": {}
-}
-```
-
----
-
-# 4. Authentication & Authorization
-
-API memiliki akses berdasarkan user dan role.
-
-Role yang digunakan:
-
-```text
-admin
-technician
-operator
-```
-
-Buyer tidak memiliki akses ke dashboard internal.
-
-### Role Access
-
-| Resource | Admin | Technician | Operator |
-|---|---:|---:|---:|
-| Users | ✓ | - | - |
-| Categories | ✓ | - | ✓ |
-| Products | ✓ | View | ✓ |
-| Machines | ✓ | View | View |
-| Machine Slots | ✓ | View | ✓ |
-| Stock | ✓ | View | ✓ |
-| Orders | ✓ | View | View |
-| Telemetry | ✓ | ✓ | View |
-| Errors | ✓ | ✓ | View |
-| Dispense | ✓ | - | - |
-
-Authentication mechanism dapat menggunakan Laravel authentication/token mechanism sesuai implementasi backend.
-
-Detail package authentication tidak menjadi bagian dari API contract ini.
-
----
-
-# 5. API Endpoint Structure
-
-```text
-/api
-│
-├── /auth
-│
-├── /users
-│
-├── /categories
-│
-├── /products
-│
-├── /machines
-│   ├── /{machine}
-│   ├── /{machine}/slots
-│   ├── /{machine}/status
-│   ├── /{machine}/telemetry
-│   └── /{machine}/errors
-│
-├── /orders
-│   └── /{order}
-│
-├── /dispenses
-│
-└── /integrations
-    └── /payment
-```
-
----
-
-# 6. Authentication API
-
-## 6.1 Login
-
-```http
-POST /api/auth/login
-```
-
-Digunakan untuk login user dashboard.
-
-### Request
-
-```json
-{
-    "email": "admin@example.com",
-    "password": "password"
-}
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Login successful",
-    "data": {
-        "user": {
-            "id": 1,
-            "name": "Admin",
-            "email": "admin@example.com",
-            "role": "admin"
-        },
-        "token": "..."
-    }
-}
-```
-
-> Bentuk token dapat disesuaikan dengan mekanisme authentication yang digunakan pada implementasi Laravel.
-
----
-
-## 6.2 Logout
-
-```http
-POST /api/auth/logout
-```
-
-Response:
-
-```json
-{
-    "success": true,
-    "message": "Logout successful"
-}
-```
-
----
-
-# 7. User API
-
-## 7.1 Get Users
-
-```http
-GET /api/users
-```
-
-Access:
-
-```text
-admin
-```
-
----
-
-## 7.2 Get User
-
-```http
-GET /api/users/{id}
-```
-
-Access:
-
-```text
-admin
-```
-
----
-
-## 7.3 Create User
-
-```http
-POST /api/users
-```
-
-### Request
-
-```json
-{
-    "name": "John Doe",
-    "email": "john@example.com",
-    "password": "password",
-    "role": "operator"
-}
-```
-
----
-
-## 7.4 Update User
-
-```http
-PUT /api/users/{id}
-```
-
----
-
-## 7.5 Delete User
-
-```http
-DELETE /api/users/{id}
-```
-
----
-
-# 8. Category API
-
-## 8.1 Get Categories
-
-```http
-GET /api/categories
-```
-
----
-
-## 8.2 Get Category
-
-```http
-GET /api/categories/{id}
-```
-
----
-
-## 8.3 Create Category
-
-```http
-POST /api/categories
-```
-
-### Request
-
-```json
-{
-    "name": "Makanan",
-    "description": "Kategori makanan"
-}
-```
-
----
-
-## 8.4 Update Category
-
-```http
-PUT /api/categories/{id}
-```
-
----
-
-## 8.5 Delete Category
-
-```http
-DELETE /api/categories/{id}
-```
-
----
-
-# 9. Product API
-
-## 9.1 Get Products
+## 4. Contoh request katalog
 
 ```http
 GET /api/products
+Accept: application/json
 ```
 
-### Query Parameters
-
-```text
-?page=1
-&per_page=10
-&search=nasi
-&category_id=1
-&is_active=true
-```
-
----
-
-## 9.2 Get Product
-
-```http
-GET /api/products/{id}
-```
-
----
-
-## 9.3 Create Product
-
-```http
-POST /api/products
-```
-
-### Request
+Contoh bentuk response ilustratif (samakan dengan response aktual/API Resource):
 
 ```json
 {
-    "category_id": 1,
-    "name": "Nasi Goreng",
-    "description": "Nasi goreng hangat",
-    "price": 15000,
-    "image": "nasi-goreng.jpg",
-    "is_active": true
-}
-```
-
----
-
-## 9.4 Update Product
-
-```http
-PUT /api/products/{id}
-```
-
----
-
-## 9.5 Delete Product
-
-```http
-DELETE /api/products/{id}
-```
-
----
-
-# 10. Machine API
-
-## 10.1 Get Machines
-
-```http
-GET /api/machines
-```
-
-### Query Parameters
-
-```text
-?status=ONLINE
-&search=VM001
-```
-
----
-
-## 10.2 Get Machine
-
-```http
-GET /api/machines/{machine}
-```
-
----
-
-## 10.3 Create Machine
-
-```http
-POST /api/machines
-```
-
-### Request
-
-```json
-{
-    "machine_code": "VM001",
-    "name": "Vending Machine Lobby",
-    "location": "Gedung A - Lantai 1",
-    "status": "OFFLINE",
-    "temperature_threshold": 80.00
-}
-```
-
----
-
-## 10.4 Update Machine
-
-```http
-PUT /api/machines/{machine}
-```
-
----
-
-## 10.5 Delete Machine
-
-```http
-DELETE /api/machines/{machine}
-```
-
----
-
-# 11. Machine Slot API
-
-## 11.1 Get Slots
-
-```http
-GET /api/machines/{machine}/slots
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Slots retrieved successfully",
-    "data": [
-        {
-            "id": 1,
-            "slot_code": "A01",
-            "product_id": 1,
-            "product_name": "Nasi Goreng",
-            "stock": 5,
-            "capacity": 10
-        }
-    ]
-}
-```
-
----
-
-## 11.2 Create Slot
-
-```http
-POST /api/machines/{machine}/slots
-```
-
-### Request
-
-```json
-{
-    "slot_code": "A01",
-    "product_id": 1,
-    "stock": 5,
-    "capacity": 10
-}
-```
-
----
-
-## 11.3 Update Slot
-
-```http
-PUT /api/machines/{machine}/slots/{slot}
-```
-
----
-
-## 11.4 Delete Slot
-
-```http
-DELETE /api/machines/{machine}/slots/{slot}
-```
-
----
-
-## 11.5 Update Stock
-
-```http
-PATCH /api/machines/{machine}/slots/{slot}/stock
-```
-
-### Request
-
-```json
-{
-    "stock": 8
-}
-```
-
-Business rule:
-
-```text
-0 <= stock <= capacity
-```
-
----
-
-# 12. Machine Monitoring API
-
-## 12.1 Get Machine Status
-
-```http
-GET /api/machines/{machine}/status
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Machine status retrieved successfully",
-    "data": {
-        "machine_id": 1,
-        "machine_code": "VM001",
-        "connection_status": "ONLINE",
-        "state": "IDLE",
-        "temperature": 72.5,
-        "door_status": "CLOSED"
+  "data": [
+    {
+      "id": 12,
+      "name": "Contoh Produk",
+      "price": 15000,
+      "image": null,
+      "is_active": true
     }
+  ]
 }
 ```
 
----
+Jangan menggunakan contoh ini sebagai bukti bahwa field tersebut sudah tersedia. Field stok yang ditampilkan harus berasal dari sumber stok aktual dan boleh perlu endpoint terpisah jika stok bergantung pada mesin/slot.
 
-## 12.2 Get Telemetry
+## 5. Contoh request status mesin
 
 ```http
-GET /api/machines/{machine}/telemetry
+GET /api/machine-status
+Accept: application/json
+Authorization: Bearer <service-token>
 ```
 
-### Query Parameters
-
-```text
-?from=2026-10-01
-&to=2026-10-04
-&limit=50
-```
-
-### Response
+Contoh payload ilustratif:
 
 ```json
 {
-    "success": true,
-    "message": "Telemetry retrieved successfully",
-    "data": [
-        {
-            "temperature": 72.5,
-            "state": "IDLE",
-            "door_status": "CLOSED",
-            "created_at": "2026-10-04T10:30:00Z"
-        }
-    ]
+  "data": {
+    "machine_id": "VM-01",
+    "status": "IDLE",
+    "temperature": 68.5,
+    "last_seen_at": "2026-10-10T20:30:00Z"
+  }
 }
 ```
 
----
+Nilai suhu di atas hanya contoh payload, bukan ambang atau target suhu yang disepakati. Gunakan unit suhu, timezone, dan nama field secara konsisten di backend serta simulator.
 
-## 12.3 Get Machine Errors
+## 6. Contoh request dispensing
+
+**Prinsip keamanan:** endpoint ini tidak boleh menjadi cara untuk melewati pembayaran atau mengurangi stok tanpa order yang valid. Rekomendasi payload adalah referensi order/command, bukan mempercayai harga atau status pembayaran dari client.
 
 ```http
-GET /api/machines/{machine}/errors
+POST /api/dispense
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer <authorized-token>
+Idempotency-Key: <unique-key>
 ```
 
-### Query Parameters
-
-```text
-?severity=CRITICAL
-&resolved=false
-```
-
-### Response
+Contoh body konseptual:
 
 ```json
 {
-    "success": true,
-    "message": "Machine errors retrieved successfully",
-    "data": [
-        {
-            "id": 1,
-            "error_code": "TEMPERATURE_HIGH",
-            "message": "Machine temperature exceeded threshold",
-            "severity": "WARNING",
-            "created_at": "2026-10-04T10:30:00Z",
-            "resolved_at": null
-        }
-    ]
+  "order_id": "ORD-12345",
+  "machine_id": "VM-01"
 }
 ```
 
----
+Backend perlu memastikan:
 
-## 12.4 Resolve Machine Error
+1. Order ditemukan dan pembayaran telah dikonfirmasi melalui mekanisme tepercaya.
+2. Order belum diselesaikan/diproses sebelumnya.
+3. Slot sesuai dengan item order dan stok tersedia.
+4. Pengurangan/reservasi stok dilakukan tepat satu kali secara transaksional.
+5. Command memiliki ID unik untuk korelasi event MQTT.
+6. Response menyatakan apakah request diterima untuk diproses, bukan mengklaim produk sudah keluar jika hasil hardware belum diterima.
 
-```http
-PATCH /api/machines/{machine}/errors/{error}/resolve
-```
-
-### Response
+Contoh response penerimaan command:
 
 ```json
 {
-    "success": true,
-    "message": "Machine error resolved",
-    "data": {
-        "id": 1,
-        "resolved_at": "2026-10-04T10:45:00Z"
-    }
+  "data": {
+    "command_id": "CMD-EXAMPLE-001",
+    "order_id": "ORD-12345",
+    "status": "queued"
+  }
 }
 ```
 
----
+Response tersebut ilustratif dan harus disejajarkan dengan bentuk aktual.
 
-# 13. Order API
+## 7. Status HTTP yang disarankan
 
-## 13.1 Get Orders
-
-```http
-GET /api/orders
-```
-
-### Query Parameters
-
-```text
-?status=PENDING
-&machine_id=1
-&page=1
-&per_page=10
-```
-
----
-
-## 13.2 Get Order
-
-```http
-GET /api/orders/{order}
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Order retrieved successfully",
-    "data": {
-        "id": 1,
-        "order_code": "ORD-20261004-0001",
-        "machine_id": 1,
-        "status": "PENDING",
-        "total_amount": 15000,
-        "items": [
-            {
-                "product_id": 1,
-                "slot_id": 1,
-                "product_name": "Nasi Goreng",
-                "quantity": 1,
-                "price": 15000,
-                "subtotal": 15000
-            }
-        ]
-    }
-}
-```
-
----
-
-## 13.3 Create Order
-
-```http
-POST /api/orders
-```
-
-### Request
-
-```json
-{
-    "machine_id": 1,
-    "items": [
-        {
-            "product_id": 1,
-            "slot_id": 1,
-            "quantity": 1
-        }
-    ]
-}
-```
-
-### Backend Process
-
-```text
-Receive Order
-      │
-      ▼
-Validate Product
-      │
-      ▼
-Validate Slot
-      │
-      ▼
-Validate Stock
-      │
-      ▼
-Calculate Total
-      │
-      ▼
-Create Order
-      │
-      ▼
-Return Order
-```
-
-Initial status:
-
-```text
-PENDING
-```
-
----
-
-# 14. Payment Integration API
-
-Payment processing berada di luar core vending machine system.
-
-Kelompok payment hanya bertanggung jawab terhadap proses pembayaran.
-
-Setelah payment berhasil, kelompok payment memberikan konfirmasi kepada backend vending machine.
-
----
-
-## 14.1 Payment Confirmation
-
-```http
-POST /api/integrations/payment/confirm
-```
-
-Endpoint ini digunakan oleh sistem payment untuk memberi tahu bahwa order telah dibayar.
-
-### Request
-
-```json
-{
-    "order_code": "ORD-20261004-0001",
-    "payment_reference": "PAY-123456",
-    "status": "PAID"
-}
-```
-
-### Backend Process
-
-```text
-Payment System
-      │
-      │ Payment Success
-      ▼
-POST /api/integrations/payment/confirm
-      │
-      ▼
-Find Order
-      │
-      ▼
-Validate Order
-      │
-      ▼
-Validate Stock
-      │
-      ▼
-Change Order Status
-      │
-      ▼
-READY_TO_DISPENSE
-      │
-      ▼
-Send MQTT DISPENSE Command
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Payment confirmation received",
-    "data": {
-        "order_code": "ORD-20261004-0001",
-        "status": "READY_TO_DISPENSE"
-    }
-}
-```
-
-### Important
-
-Endpoint ini bukan payment processor.
-
-Backend vending machine hanya:
-
-- Menerima konfirmasi
-- Memvalidasi order
-- Memastikan order dapat diproses
-- Menjalankan proses dispensing
-
-Payment reference hanya digunakan sebagai referensi integrasi.
-
----
-
-# 15. Dispense API
-
-## 15.1 Trigger Dispense
-
-```http
-POST /api/orders/{order}/dispense
-```
-
-Endpoint ini digunakan untuk memulai proses dispensing.
-
-### Preconditions
-
-Order harus:
-
-```text
-READY_TO_DISPENSE
-```
-
-dan:
-
-```text
-Stock tersedia
-Machine tersedia
-Slot valid
-```
-
-### Backend Process
-
-```text
-POST /dispense
-      │
-      ▼
-Validate Order
-      │
-      ▼
-Validate Machine
-      │
-      ▼
-Validate Slot
-      │
-      ▼
-Validate Stock
-      │
-      ▼
-Create Dispense
-      │
-      ▼
-Change Order
-→ DISPENSING
-      │
-      ▼
-Publish MQTT Command
-```
-
-### MQTT Command
-
-```json
-{
-    "command": "DISPENSE",
-    "slot": "A01"
-}
-```
-
-### Response
-
-```json
-{
-    "success": true,
-    "message": "Dispense command sent",
-    "data": {
-        "order_code": "ORD-20261004-0001",
-        "status": "DISPENSING",
-        "machine_id": 1,
-        "slot_code": "A01"
-    }
-}
-```
-
----
-
-# 16. Dispense Result
-
-Setelah mesin melakukan dispensing melalui MQTT, backend menerima response/status dari mesin.
-
-### Successful Flow
-
-```text
-READY_TO_DISPENSE
-        │
-        ▼
-    DISPENSING
-        │
-        ▼
-       DONE
-        │
-        ▼
-    COMPLETED
-```
-
-Backend kemudian:
-
-```text
-Decrease Stock
-Update Dispense
-Update Order
-Store Telemetry
-```
-
-### Failed Flow
-
-```text
-READY_TO_DISPENSE
-        │
-        ▼
-    DISPENSING
-        │
-        ▼
-      ERROR
-        │
-        ▼
-     FAILED
-```
-
-Backend kemudian:
-
-```text
-Store Machine Error
-Update Dispense
-Update Order
-Notify Technician
-```
-
----
-
-# 17. HTTP Status Codes
-
-| Code | Meaning |
+| HTTP status | Pemakaian umum |
 |---|---|
-| 200 | Success |
-| 201 | Resource created |
-| 204 | Success without response body |
-| 400 | Bad request |
-| 401 | Unauthenticated |
-| 403 | Unauthorized |
-| 404 | Resource not found |
-| 409 | Conflict |
-| 422 | Validation error |
-| 500 | Internal server error |
-| 503 | Service unavailable |
+| `200 OK` | Request berhasil dibaca/diproses. |
+| `201 Created` | Resource baru dibuat. |
+| `202 Accepted` | Command diterima untuk diproses asynchronous. |
+| `400 Bad Request` | Request tidak dapat diproses karena format dasar invalid. |
+| `401 Unauthorized` | Belum terautentikasi. |
+| `403 Forbidden` | Pengguna/token tidak berhak. |
+| `404 Not Found` | Resource tidak ditemukan. |
+| `409 Conflict` | Stok tidak cukup, state tidak cocok, atau request duplikat berkonflik. |
+| `422 Unprocessable Entity` | Validasi field gagal. |
+| `429 Too Many Requests` | Batas request terlampaui. |
+| `500/503` | Kesalahan server atau dependency tidak tersedia; detail internal tidak ditampilkan ke client. |
 
----
+Jangan memaksakan semua status ini jika konvensi project sudah menetapkan bentuk lain; jaga konsistensi.
 
-# 18. Validation Rules
+## 8. Integrasi status pembayaran
 
-## Product
+Implementasi payment gateway dikerjakan kelompok lain. Sebelum integrasi, kedua kelompok harus menetapkan:
 
-```text
-name       → required
-category_id → required
-price      → required, >= 0
-```
+- Identitas order stabil dan tidak berubah.
+- Cara backend memverifikasi pembayaran sukses (callback server-to-server yang ditandatangani, verifikasi status ke provider, atau mekanisme aman yang disetujui).
+- Cara menangani callback berulang, status pending, gagal, expired, dan refund.
+- Field/endpoint serta secret yang tidak boleh dibagikan ke frontend.
+- Aturan kapan stok dikurangi/reservasi dan bagaimana kegagalan dispensing direkonsiliasi.
 
-## Machine
+Jangan menganggap request dari kiosk sebagai bukti pembayaran yang sah.
 
-```text
-machine_code           → required, unique
-name                   → required
-temperature_threshold  → required, >= 0
-```
+## 9. MQTT contract
 
-## Machine Slot
+Nama topic di bawah merupakan usulan; sesuaikan dengan topic yang sudah dipakai simulator.
 
-```text
-machine_id → required
-product_id → required
-slot_code  → required
-stock      → >= 0
-capacity   → > 0
-stock      → <= capacity
-```
+| Arah | Topic konseptual | Kegunaan |
+|---|---|---|
+| Simulator → backend consumer | `vending/{machine_id}/telemetry` | Suhu, status, last-seen, dan telemetry yang diizinkan. |
+| Backend → mesin/simulator | `vending/{machine_id}/command/dispense` | Command dispensing dengan `command_id`, `order_id`, dan slot yang tervalidasi. |
+| Simulator → backend consumer | `vending/{machine_id}/event/dispense` | Progress dan hasil command, termasuk command ID. |
 
-## Order
-
-```text
-machine_id → required
-items      → required
-quantity   → > 0
-```
-
----
-
-# 19. API Error Examples
-
-## Product Not Found
+Contoh event konseptual:
 
 ```json
 {
-    "success": false,
-    "message": "Product not found"
+  "machine_id": "VM-01",
+  "command_id": "CMD-EXAMPLE-001",
+  "order_id": "ORD-12345",
+  "slot_code": "A1",
+  "status": "done",
+  "occurred_at": "2026-10-10T20:30:00Z"
 }
 ```
 
-## Insufficient Stock
+Gunakan validasi payload, identitas mesin, ACL/credential broker, dan idempotensi pada consumer. Jangan mengurangi stok lagi saat event `done` diterima jika pengurangan stok sudah dicatat setelah pembayaran sukses.
 
-```json
-{
-    "success": false,
-    "message": "Insufficient stock",
-    "errors": {
-        "slot": [
-            "Requested quantity exceeds available stock."
-        ]
-    }
-}
-```
+## 10. Alur pengujian integrasi
 
-## Machine Offline
-
-```json
-{
-    "success": false,
-    "message": "Machine is offline"
-}
-```
-
-## Invalid Order State
-
-```json
-{
-    "success": false,
-    "message": "Order is not ready for dispensing"
-}
-```
-
----
-
-# 20. API Flow Summary
-
-## Product Management
-
-```text
-Dashboard
-    │
-    ▼
-GET /products
-    │
-    ├── POST /products
-    ├── PUT /products/{id}
-    └── DELETE /products/{id}
-```
-
-## Machine Management
-
-```text
-Dashboard
-    │
-    ▼
-GET /machines
-    │
-    ├── GET /machines/{id}
-    ├── POST /machines
-    ├── PUT /machines/{id}
-    └── DELETE /machines/{id}
-```
-
-## Stock Management
-
-```text
-Dashboard
-    │
-    ▼
-GET /machines/{machine}/slots
-    │
-    └── PATCH /slots/{slot}/stock
-```
-
-## Order & Dispensing
-
-```text
-Buyer / Client
-      │
-      ▼
-POST /orders
-      │
-      ▼
-PENDING
-      │
-      ▼
-Payment System
-      │
-      ▼
-POST /integrations/payment/confirm
-      │
-      ▼
-READY_TO_DISPENSE
-      │
-      ▼
-POST /orders/{order}/dispense
-      │
-      ▼
-MQTT
-      │
-      ▼
-Machine
-      │
-      ▼
-DISPENSING
-      │
-      ├────────► ERROR
-      │
-      ▼
-DONE
-      │
-      ▼
-COMPLETED
-```
-
----
-
-# 21. MQTT and REST API Boundary
-
-REST API dan MQTT memiliki tanggung jawab berbeda.
-
-### REST API
-
-Digunakan untuk:
-
-```text
-Dashboard
-Other Systems
-Payment Integration
-Business Data
-Orders
-Products
-Machines
-Monitoring
-```
-
-### MQTT
-
-Digunakan untuk:
-
-```text
-Laravel Backend
-       │
-       ▼
-Mosquitto
-       │
-       ├── Python Simulator
-       └── ESP32
-```
-
-MQTT menangani:
-
-- Machine command
-- Machine status
-- Telemetry
-- Machine error
-- Dispense response
-
-REST API tidak digunakan sebagai jalur utama komunikasi real-time antara Laravel dan ESP32.
-
----
-
-# 22. Source of Truth
-
-Dokumen ini menjadi referensi utama untuk seluruh endpoint REST API.
-
-Setiap perubahan terhadap:
-
-- Endpoint
-- HTTP Method
-- Request
-- Response
-- Validation
-- Authentication
-- Authorization
-- Integration Contract
-
-harus diperbarui pada dokumen ini.
-
-Implementasi Laravel API harus mengikuti specification yang telah didefinisikan.
+1. Ambil daftar route aktual dari `php artisan route:list --path=api`.
+2. Uji endpoint dengan Postman menggunakan environment variable untuk `base_url` dan token.
+3. Pastikan request tanpa token/role yang tepat ditolak pada endpoint privat.
+4. Uji produk aktif, produk nonaktif, dan stok kosong.
+5. Uji order belum dibayar, pembayaran berhasil, callback duplikat, serta request dispense duplikat.
+6. Uji simulator offline, broker putus, JSON invalid, command timeout, sukses, dan gagal.
+7. Bagikan kepada kelompok kiosk file Postman Collection dan environment contoh tanpa secret. Sertakan base URL yang dapat diakses lintas laptop, bukan `localhost` milik developer API.

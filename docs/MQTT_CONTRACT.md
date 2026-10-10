@@ -1,1196 +1,266 @@
-# MQTT Contract
+# MQTT Contract — Sistem Perangkat Lunak Mesin Makanan Panas Otomatis
 
-## 1. Overview
+## 1. Tujuan dan status dokumen
 
-MQTT digunakan sebagai communication protocol antara Laravel Backend dengan vending machine.
+Dokumen ini mendefinisikan kontrak komunikasi MQTT antara backend Laravel, broker Mosquitto, dan simulator Python/perangkat vending machine.
 
-Komunikasi menggunakan **Mosquitto sebagai MQTT Broker**.
+**Status: rancangan kontrak awal / wajib diverifikasi terhadap kode aktual.** Nama topic, format payload, versi MQTT, QoS, dan cara publish/subscribe yang sudah ada di repository harus diperiksa terlebih dahulu. Jangan mengganti implementasi aktif secara sepihak hanya agar cocok dengan dokumen ini. Jika ada perbedaan, dokumentasikan perbedaannya dan sepakati perubahan dengan anggota tim terkait.
 
-MQTT digunakan untuk komunikasi machine-level seperti:
+Dokumen ini melengkapi `docs/API_SPECIFICATION.md`:
 
-- Machine command
-- Machine status
-- Machine telemetry
-- Machine response
-- Machine error
+- REST API mengatur komunikasi HTTP dengan kiosk, dashboard, dan integrasi eksternal.
+- MQTT Contract mengatur pesan asynchronous antara backend dan mesin/simulator.
+- Keduanya bukan pengganti satu sama lain.
 
-MQTT tidak digunakan untuk:
+## 2. Prinsip utama
 
-- User authentication
-- Product CRUD
-- Order CRUD
-- Dashboard communication
-- Payment processing
+1. **Database/backend adalah sumber kebenaran stok bisnis.** Simulator tidak boleh mengurangi atau mengubah stok database secara mandiri.
+2. **MQTT adalah kanal komunikasi, bukan database bisnis.** Pesan telemetry, command, dan event bukan pengganti catatan transaksi database.
+3. **Backend memutuskan apakah dispensing boleh dilakukan.** Simulator tidak boleh menganggap order valid hanya berdasarkan pesan MQTT yang tidak terautentikasi/terotorisasi.
+4. **Setiap command memiliki identitas stabil.** Gunakan `command_id` untuk deduplikasi dan korelasi retry/event.
+5. **Pesan dapat terkirim lebih dari satu kali.** Consumer wajib idempotent dan tidak boleh menjalankan satu command atau memproses stok dua kali.
+6. **Perintah terkirim bukan bukti dispensing berhasil.** Hasil perlu dilaporkan melalui event dan dicatat oleh backend.
+7. **Jangan mengirim secret atau data pembayaran sensitif lewat MQTT.** Tidak perlu menyertakan token pembayaran, nomor kartu, atau bukti pembayaran mentah dalam pesan mesin.
+8. **Suhu dimonitor terus-menerus.** Jangan menambahkan fase pemanasan ulang pada setiap transaksi; aturan ambang suhu harus berasal dari konfigurasi yang disetujui.
 
-REST API digunakan untuk kebutuhan business logic dan data management.
-
----
-
-# 2. MQTT Architecture
+## 3. Arsitektur dan arah pesan
 
 ```text
-                    Laravel Backend
-                          │
-                          │ MQTT Publish / Subscribe
-                          ▼
-                  ┌─────────────────┐
-                  │ Mosquitto Broker│
-                  └────────┬────────┘
-                           │
-                ┌──────────┴──────────┐
-                │                     │
-                ▼                     ▼
-        Python Simulator          ESP32 Firmware
+Python Simulator / Device
+    |-- telemetry ----------------------> MQTT Broker --> Laravel MQTT consumer
+    |<-- dispense command --------------- Laravel backend
+    |-- dispense event / result --------> MQTT Broker --> Laravel MQTT consumer
+
+Laravel REST API <--> Database
+                       |
+                       +-- authoritative order, slot, and stock records
 ```
 
-Python Simulator dan ESP32 menggunakan MQTT contract yang sama.
+Diagram ini konseptual. Pastikan aplikasi Laravel benar-benar memiliki publisher dan consumer MQTT sebelum menyatakan integrasi end-to-end sudah aktif.
 
-Artinya:
+## 4. Topic yang diusulkan
 
-```text
-Python Simulator
-       │
-       │ mengikuti contract yang sama
-       ▼
-ESP32 Firmware
-```
+Topik berikut adalah **nama konseptual**, bukan klaim bahwa topic ini sudah digunakan kode sekarang.
 
-Hal ini memungkinkan simulator digunakan sebagai pengganti hardware selama tahap development dan testing.
+| Topic | Publisher | Subscriber | Tujuan | QoS awal | Retained |
+|---|---|---|---|---:|---|
+| `vending/{machine_id}/telemetry` | Simulator/perangkat | Backend, dashboard gateway bila ada | Telemetri suhu dan kondisi mesin terkini | 0 atau 1 sesuai kebutuhan reliabilitas | Boleh `true` hanya untuk snapshot terkini; timestamp wajib diperiksa |
+| `vending/{machine_id}/command/dispense` | Backend | Simulator/perangkat untuk mesin terkait | Meminta dispensing berdasarkan command yang sudah divalidasi backend | 1 | **`false` — command tidak boleh menjadi retained message** |
+| `vending/{machine_id}/event/dispense` | Simulator/perangkat | Backend | ACK, progres, serta hasil dispensing | 1 | `false` |
+| `vending/{machine_id}/availability` *(opsional)* | Simulator/perangkat atau Last Will broker | Backend/dashboard gateway | Menandai konektivitas mesin `online`/`offline` | 1 | `true` dapat digunakan dengan Last Will yang benar |
 
----
+Aturan topic:
 
-# 3. Broker Configuration
+- `{machine_id}` harus ID mesin yang terdaftar di backend; jangan menerima ID bebas yang tidak dikenal.
+- Gunakan topic tanpa slash di awal dan pertahankan huruf besar/kecil secara konsisten.
+- Topic produksi dan development sebaiknya dipisahkan oleh prefix/environment bila satu broker dipakai bersama.
+- Jangan memublikasikan command ke wildcard topic yang dapat membuat beberapa mesin mengeksekusi order yang sama.
+- Jangan mengubah topic aktif sebelum memeriksa konfigurasi Python, consumer/publisher Laravel, `.env.example`, dan dokumentasi tim.
 
-Default development configuration:
+## 5. Format pesan umum
 
-```text
-Host:
-localhost
-
-Port:
-1883
-
-Protocol:
-MQTT
-
-Version:
-MQTT 3.1.1
-```
-
-Configuration dapat disesuaikan berdasarkan environment.
-
-Contoh `.env`:
-
-```env
-MQTT_BROKER=localhost
-MQTT_PORT=1883
-MQTT_USERNAME=
-MQTT_PASSWORD=
-```
-
-Credential tidak boleh ditulis langsung di source code.
-
----
-
-# 4. Topic Structure
-
-Setiap topic menggunakan `machine_id` atau `machine_code` sebagai identifier mesin.
-
-Format utama:
-
-```text
-vending/machine/{machine_id}/status
-vending/machine/{machine_id}/telemetry
-vending/machine/{machine_id}/command
-vending/machine/{machine_id}/response
-vending/machine/{machine_id}/error
-```
-
-Contoh:
-
-```text
-vending/machine/VM001/status
-vending/machine/VM001/telemetry
-vending/machine/VM001/command
-vending/machine/VM001/response
-vending/machine/VM001/error
-```
-
-`VM001` merupakan `machine_code` yang tersimpan pada database.
-
----
-
-# 5. Topic Responsibility
-
-| Topic | Publisher | Subscriber | Purpose |
-|---|---|---|---|
-| `/status` | Machine | Backend | Machine status |
-| `/telemetry` | Machine | Backend | Sensor and machine telemetry |
-| `/command` | Backend | Machine | Command to machine |
-| `/response` | Machine | Backend | Response to command |
-| `/error` | Machine | Backend | Machine error |
-
----
-
-# 6. Communication Direction
-
-## Backend → Machine
-
-```text
-Laravel Backend
-      │
-      │ Publish
-      ▼
-vending/machine/{machine_id}/command
-      │
-      ▼
-Machine
-```
-
-Digunakan untuk mengirim command seperti:
-
-```text
-DISPENSE
-```
-
----
-
-## Machine → Backend
-
-```text
-Machine
-   │
-   ├── Publish Status
-   ├── Publish Telemetry
-   ├── Publish Response
-   └── Publish Error
-          │
-          ▼
-       Mosquitto
-          │
-          ▼
-   Laravel Backend
-```
-
----
-
-# 7. Machine Status
-
-## Topic
-
-```text
-vending/machine/{machine_id}/status
-```
-
-Publisher:
-
-```text
-Machine
-```
-
-Subscriber:
-
-```text
-Laravel Backend
-```
-
-### Payload
+Pesan harus berupa JSON UTF-8 yang valid. Rekomendasi envelope umum:
 
 ```json
 {
-    "machine_id": "VM001",
-    "status": "ONLINE",
-    "state": "IDLE",
-    "timestamp": "2026-10-04T10:30:00Z"
+  "schema_version": "1.0",
+  "message_id": "<unique-message-uuid>",
+  "message_type": "machine.telemetry",
+  "machine_id": "VM-01",
+  "occurred_at": "2026-10-11T03:30:00Z",
+  "data": {}
 }
 ```
 
-### Status
+Field umum:
 
-Connection status:
+| Field | Wajib | Arti |
+|---|---|---|
+| `schema_version` | Ya | Versi skema payload, tidak sama dengan versi aplikasi. |
+| `message_id` | Ya | ID unik untuk satu pesan MQTT; pesan baru memiliki ID baru. |
+| `message_type` | Ya | Jenis pesan, misalnya `machine.telemetry`, `dispense.command`, atau `dispense.event`. |
+| `machine_id` | Ya | ID mesin yang terdaftar dan sesuai topic. |
+| `occurred_at` | Ya | Timestamp ISO 8601 dalam UTC; akhiri dengan `Z`. |
+| `data` | Ya | Payload khusus sesuai `message_type`. |
 
-```text
-ONLINE
-OFFLINE
-```
+Validasi bahwa `machine_id` pada payload cocok dengan ID pada topic. Tolak JSON invalid, field wajib hilang, tipe data tidak sesuai, timestamp tidak valid, atau pesan dengan mesin yang tidak dikenal. Pesan invalid dicatat secara aman tanpa menyimpan credential atau data sensitif.
 
-### State
+## 6. Telemetry mesin
 
-Machine state:
-
-```text
-IDLE
-VALIDATING
-DISPENSING
-DONE
-ERROR
-```
-
----
-
-# 8. Machine Telemetry
-
-## Topic
-
-```text
-vending/machine/{machine_id}/telemetry
-```
-
-Publisher:
-
-```text
-Machine
-```
-
-Subscriber:
-
-```text
-Laravel Backend
-```
-
-### Payload
+Contoh payload konseptual untuk topic `vending/VM-01/telemetry`:
 
 ```json
 {
-    "machine_id": "VM001",
-    "temperature": 72.5,
-    "state": "IDLE",
-    "door_status": "CLOSED",
-    "timestamp": "2026-10-04T10:30:00Z"
+  "schema_version": "1.0",
+  "message_id": "<unique-message-uuid>",
+  "message_type": "machine.telemetry",
+  "machine_id": "VM-01",
+  "occurred_at": "2026-10-11T03:30:00Z",
+  "data": {
+    "machine_state": "IDLE",
+    "temperature_c": 68.5
+  }
 }
 ```
 
-### Fields
+Ketentuan:
 
-| Field | Type | Required | Description |
-|---|---|---:|---|
-| machine_id | string | Yes | Machine identifier |
-| temperature | number | Yes | Machine temperature |
-| state | string | Yes | Current machine state |
-| door_status | string | Yes | Door condition |
-| timestamp | datetime | Yes | Telemetry timestamp |
+- `temperature_c` menggunakan satuan Celsius dan angka harus finite; ambang peringatan/batas aman dibaca dari konfigurasi yang disetujui.
+- `machine_state` gunakan state yang disepakati: `IDLE`, `VALIDATING`, `DISPENSING`, `DONE`, atau `FAILED`. Jika implementasi sekarang memakai nama lain, verifikasi dan sepakati pemetaan terlebih dahulu.
+- Field tambahan (misalnya sensor, door status, atau slot sensor) hanya ditambahkan bila benar-benar tersedia dan didefinisikan dengan tipe data jelas.
+- Telemetry yang terlambat tidak boleh menimpa kondisi terbaru. Bandingkan timestamp/urutan pesan dengan kebijakan yang konsisten.
+- **Jangan menjadikan field stok yang berasal dari simulator sebagai sumber kebenaran stok database.** Bila sensor fisik benar-benar menghitung isi slot, simpan sebagai observasi terpisah dan rancang rekonsiliasi eksplisit.
 
-### Door Status
+## 7. Command dispensing: backend → mesin
 
-```text
-OPEN
-CLOSED
-```
-
----
-
-# 9. Machine Command
-
-## Topic
-
-```text
-vending/machine/{machine_id}/command
-```
-
-Publisher:
-
-```text
-Laravel Backend
-```
-
-Subscriber:
-
-```text
-Machine
-```
-
-Command digunakan untuk memberikan instruksi kepada mesin.
-
----
-
-# 10. DISPENSE Command
-
-Command utama pada sistem adalah `DISPENSE`.
-
-### Payload
+Contoh konseptual topic `vending/VM-01/command/dispense`:
 
 ```json
 {
-    "command": "DISPENSE",
-    "order_code": "ORD-20261004-0001",
-    "slot": "A01",
+  "schema_version": "1.0",
+  "message_id": "<unique-message-uuid>",
+  "message_type": "dispense.command",
+  "machine_id": "VM-01",
+  "occurred_at": "2026-10-11T03:31:00Z",
+  "data": {
+    "command_id": "CMD-<unique-id>",
+    "order_id": "ORD-<stable-order-id>",
+    "slot_code": "A1",
     "quantity": 1,
-    "timestamp": "2026-10-04T10:30:00Z"
+    "expires_at": "2026-10-11T03:32:00Z"
+  }
 }
 ```
 
-### Fields
+Field command di atas adalah baseline konseptual. Cocokkan nama dan struktur ID/slot dengan skema aktif. Jangan menambahkan field yang tidak diperlukan.
 
-| Field | Type | Required | Description |
-|---|---|---:|---|
-| command | string | Yes | Command name |
-| order_code | string | Yes | Order identifier |
-| slot | string | Yes | Slot to dispense |
-| quantity | integer | Yes | Quantity to dispense |
-| timestamp | datetime | Yes | Command timestamp |
+Sebelum publish command, backend harus:
 
-### Example
+1. Memvalidasi order dan memastikan status pembayaran sudah dikonfirmasi melalui mekanisme tepercaya yang disepakati.
+2. Memastikan order belum berhasil diproses atau memiliki command aktif yang setara.
+3. Memvalidasi hubungan order-item, mesin, slot, dan ketersediaan stok.
+4. Mencatat perubahan stok atau reservasi tepat satu kali secara transaksional sesuai kebijakan inventory project.
+5. Menghasilkan `command_id` stabil untuk percobaan dispensing tersebut dan menyimpan status command/outbox bila pola itu digunakan.
+6. Mengirim hanya instruksi minimum yang diperlukan mesin. Mesin tidak boleh menerima atau mempercayai harga maupun klaim status pembayaran dari client.
 
-```text
-Order:
-ORD-20261004-0001
+Perilaku simulator:
 
-Machine:
-VM001
+- Memvalidasi `message_type`, `machine_id`, field wajib, jumlah, expiry, dan `command_id`.
+- Memproses satu `command_id` paling banyak satu kali; retry dari pesan MQTT tidak boleh menyebabkan dispensing berulang.
+- Menolak command yang kedaluwarsa, tidak ditujukan untuk mesin ini, invalid, atau tidak sesuai state mesin.
+- Jika command yang sama diterima ulang, balas dengan status yang sudah diketahui atau ACK duplikat; jangan menjalankan dispensing lagi.
+- MQTT QoS 1 memungkinkan redelivery, sehingga deduplikasi tetap wajib meskipun broker memakai QoS 1.
+- Command tidak boleh retained. Expiry/persistence bergantung pada versi dan konfigurasi MQTT yang benar-benar digunakan; `expires_at` tetap perlu divalidasi aplikasi.
 
-Slot:
-A01
+## 8. Event dispensing: mesin → backend
 
-Quantity:
-1
-```
-
-Backend publish:
-
-```text
-vending/machine/VM001/command
-```
-
-Payload:
+Contoh konseptual event pada topic `vending/VM-01/event/dispense`:
 
 ```json
 {
-    "command": "DISPENSE",
-    "order_code": "ORD-20261004-0001",
-    "slot": "A01",
-    "quantity": 1,
-    "timestamp": "2026-10-04T10:30:00Z"
+  "schema_version": "1.0",
+  "message_id": "<unique-event-uuid>",
+  "message_type": "dispense.event",
+  "machine_id": "VM-01",
+  "occurred_at": "2026-10-11T03:31:10Z",
+  "data": {
+    "command_id": "CMD-<unique-id>",
+    "order_id": "ORD-<stable-order-id>",
+    "slot_code": "A1",
+    "status": "done",
+    "error_code": null
+  }
 }
 ```
 
----
+Status event yang direkomendasikan:
 
-# 11. Command Validation
+- `accepted`: command diterima dan valid, belum tentu proses fisik dimulai.
+- `started`: dispensing benar-benar mulai dijalankan.
+- `done`: simulator/perangkat melaporkan proses selesai.
+- `failed`: proses gagal; sertakan `error_code` yang terdefinisi jika tersedia.
 
-Machine tidak langsung menjalankan command tanpa validasi.
+Perbedaan status command dan state mesin harus jelas. `DONE` adalah state mesin; `done` adalah hasil command.
 
-Alur:
+Backend wajib:
 
-```text
-Receive Command
-      │
-      ▼
-Validate JSON
-      │
-      ▼
-Validate Command
-      │
-      ▼
-Validate Slot
-      │
-      ▼
-Validate Stock
-      │
-      ▼
-Validate Machine Condition
-      │
-      ▼
-VALIDATING
-      │
-      ▼
-DISPENSING
-```
+- Memeriksa mesin, `command_id`, dan `order_id` terhadap record yang dikenal.
+- Memastikan event berhubungan dengan command yang benar dan transisi status diperbolehkan.
+- Menangani event duplikat secara idempotent, misalnya dengan `message_id` unik dan constraint bisnis pada command.
+- Menyimpan event/status dan waktu yang diterima agar bisa diaudit.
+- Tidak mengurangi stok sekali lagi saat event `done` diterima jika stok sudah dikurangi/dipesan pada tahap setelah pembayaran berhasil.
+- Jika status `failed`, timeout, atau hasilnya tidak pasti, tandai untuk rekonsiliasi sesuai kebijakan bisnis. Jangan otomatis menambah stok kembali sebelum diketahui apakah produk benar-benar keluar.
 
-Jika validasi gagal:
+## 9. State machine dan timeout
 
-```text
-VALIDATING
-      │
-      ▼
-ERROR
-```
+Alur logis minimum:
 
----
+`IDLE → VALIDATING → DISPENSING → DONE → IDLE`
 
-# 12. Machine Response
+State `FAILED`/`ERROR` dipakai saat kegagalan sesuai implementasi. Pantau suhu secara berkelanjutan; jangan melakukan pemanasan ulang untuk setiap order.
 
-## Topic
+- Backend menyimpan status pemrosesan command/order yang otoritatif untuk kebutuhan bisnis.
+- Simulator melaporkan state/progress perangkat aktual, bukan memutuskan status pembayaran atau mengubah stok bisnis.
+- Timeout menandakan hasil belum diketahui, bukan otomatis berarti produk gagal keluar.
+- Setelah timeout, periksa event terlambat dan kondisi perangkat sebelum retry; jangan mengirim command baru yang berpotensi mendispense order yang sama dua kali.
+- `expires_at` harus diperiksa oleh aplikasi. Jangan bergantung pada retained message sebagai mekanisme command queue.
 
-```text
-vending/machine/{machine_id}/response
-```
+## 10. QoS, retained message, reconnect
 
-Publisher:
+Pengaturan QoS/retained pada tabel topic adalah rekomendasi awal dan perlu diuji terhadap broker serta library aktual.
 
-```text
-Machine
-```
+- QoS 0 sesuai untuk telemetry frekuensi tinggi yang kehilangan satu sampel masih bisa ditoleransi.
+- QoS 1 direkomendasikan untuk command dan event penting dengan deduplikasi aplikasi karena pesan dapat dikirim ulang.
+- Jangan mengasumsikan QoS 1 berarti tepat satu kali eksekusi.
+- Command dispensing selalu retained `false`.
+- Snapshot telemetry/availability boleh retained jika diperlukan, tetapi gunakan timestamp/last-seen untuk menandai data basi.
+- Saat reconnect, simulator mengirim telemetry terbaru dan availability online sesuai rancangan. Backend jangan menafsirkan status lama yang retained sebagai bukti bahwa mesin masih online sekarang.
+- Atur Last Will/availability bila didukung dan cocok dengan konfigurasi broker saat ini.
 
-Subscriber:
+## 11. Keamanan broker dan validasi
 
-```text
-Laravel Backend
-```
+- Gunakan autentikasi broker dan ACL per peran/perangkat bila tersedia.
+- Mesin hanya boleh subscribe ke command untuk ID mesin itu sendiri dan publish ke topic telemetry/event miliknya.
+- Backend hanya boleh publish command ke mesin terotorisasi serta subscribe pada telemetry/event yang diperlukan.
+- Jangan memakai credential default pada deployment bersama; rahasiakan credential lewat environment/configuration, bukan repository.
+- Validasi ukuran pesan, JSON, topic, ID, enum status, nilai suhu, timestamp, dan batas `quantity`.
+- Jangan memasukkan password, token, isi `.env`, atau detail pembayaran sensitif ke log payload.
+- Pisahkan akses broker development dan deployment jika dibutuhkan.
 
-Response digunakan untuk memberikan hasil pemrosesan command.
+## 12. Error handling dan observability
 
----
+Minimal catat:
 
-## 12.1 Command Accepted
+- `machine_id`, `message_id`, `message_type`, `command_id` (jika ada), waktu diterima, hasil validasi, dan alasan penolakan yang aman.
+- Kegagalan koneksi/reconnect broker, pesan invalid, command timeout, event duplikat, dan perubahan status command.
+- Jangan log credential atau data sensitif.
 
-```json
-{
-    "command": "DISPENSE",
-    "order_code": "ORD-20261004-0001",
-    "status": "ACCEPTED",
-    "slot": "A01",
-    "timestamp": "2026-10-04T10:30:01Z"
-}
-```
+Kode error yang disarankan untuk command/event gagal (gunakan hanya yang relevan dan petakan ke implementasi nyata): `INVALID_COMMAND`, `UNKNOWN_MACHINE`, `UNKNOWN_SLOT`, `INVALID_STATE`, `COMMAND_EXPIRED`, `SLOT_EMPTY`, `DISPENSE_FAILED`, `DEVICE_ERROR`, `TIMEOUT`. Jangan membuat asumsi penyebab fisik jika simulator/hardware tidak mampu mendeteksinya.
 
----
+## 13. Checklist pengujian integrasi
 
-## 12.2 Dispense Completed
+- [ ] Topic dan payload di dokumen sudah dibandingkan dengan konfigurasi simulator serta consumer/publisher aktual.
+- [ ] Publish/subscribe berhasil menggunakan broker development.
+- [ ] Payload JSON invalid, field wajib hilang, tipe salah, dan machine ID tidak sesuai ditolak.
+- [ ] Suhu valid diproses dan nilai non-finite/invalid ditolak.
+- [ ] Mesin offline/reconnect dan telemetry basi ditangani.
+- [ ] Command hanya diterbitkan setelah validasi backend dan konfirmasi pembayaran tepercaya.
+- [ ] Command retained dinonaktifkan.
+- [ ] Pesan command dengan `command_id` sama tidak menjalankan dispensing dua kali.
+- [ ] Event `accepted`, `started`, `done`, dan `failed` diproses sesuai transisi yang diizinkan.
+- [ ] Event duplikat tidak menggandakan perubahan order/stok.
+- [ ] Timeout tidak langsung menyebabkan command berulang atau stok dikembalikan tanpa rekonsiliasi.
+- [ ] Stok database tetap otoritatif; simulator tidak dapat mengubah stok bisnis secara mandiri.
+- [ ] Credential broker tidak ditambahkan ke Git atau Postman collection yang dibagikan.
 
-```json
-{
-    "command": "DISPENSE",
-    "order_code": "ORD-20261004-0001",
-    "status": "COMPLETED",
-    "slot": "A01",
-    "quantity": 1,
-    "timestamp": "2026-10-04T10:30:08Z"
-}
-```
+## 14. Sebelum mengubah implementasi
 
----
+Inspeksi terlebih dahulu:
 
-## 12.3 Dispense Failed
+1. File simulator Python, konfigurasi Paho MQTT, dan semua topic yang sedang dipakai.
+2. Publisher/consumer Laravel atau worker yang memproses MQTT (jika sudah ada).
+3. Konfigurasi broker Mosquitto dan ACL bila tersedia.
+4. Field machine/slot/order/command pada migration dan model aktual.
+5. Test serta log integrasi yang sudah ada.
 
-```json
-{
-    "command": "DISPENSE",
-    "order_code": "ORD-20261004-0001",
-    "status": "FAILED",
-    "slot": "A01",
-    "error_code": "DISPENSER_JAM",
-    "timestamp": "2026-10-04T10:30:08Z"
-}
-```
-
----
-
-# 13. Machine Error
-
-## Topic
-
-```text
-vending/machine/{machine_id}/error
-```
-
-Publisher:
-
-```text
-Machine
-```
-
-Subscriber:
-
-```text
-Laravel Backend
-```
-
-### Payload
-
-```json
-{
-    "machine_id": "VM001",
-    "error_code": "TEMPERATURE_HIGH",
-    "message": "Machine temperature exceeded threshold",
-    "severity": "WARNING",
-    "state": "ERROR",
-    "timestamp": "2026-10-04T10:31:00Z"
-}
-```
-
-### Error Codes
-
-Initial error codes:
-
-```text
-TEMPERATURE_HIGH
-SLOT_EMPTY
-DISPENSER_JAM
-DOOR_OPEN
-MQTT_ERROR
-INVALID_COMMAND
-UNKNOWN_ERROR
-```
-
-Error code dapat dikembangkan sesuai kebutuhan hardware.
-
----
-
-# 14. Error Severity
-
-Severity yang digunakan:
-
-```text
-INFO
-WARNING
-CRITICAL
-```
-
-### INFO
-
-Informasi normal yang tidak membutuhkan tindakan segera.
-
-### WARNING
-
-Kondisi yang perlu diperhatikan.
-
-Contoh:
-
-```text
-TEMPERATURE_HIGH
-```
-
-### CRITICAL
-
-Kondisi yang dapat menyebabkan mesin tidak dapat beroperasi.
-
-Contoh:
-
-```text
-DISPENSER_JAM
-```
-
----
-
-# 15. State Machine
-
-Machine menggunakan state:
-
-```text
-IDLE
-   │
-   ▼
-VALIDATING
-   │
-   ▼
-DISPENSING
-   │
-   ▼
-DONE
-   │
-   ▼
-IDLE
-```
-
-Error transition:
-
-```text
-VALIDATING ───────► ERROR
-DISPENSING ───────► ERROR
-ERROR ────────────► IDLE
-```
-
-`HEATING` tidak termasuk state machine karena machine berada dalam kondisi panas secara terus-menerus.
-
-Temperature hanya menjadi telemetry dan condition monitoring.
-
----
-
-# 16. DISPENSE Communication Flow
-
-Alur lengkap proses dispensing:
-
-```text
-Payment System
-      │
-      │ Payment Success
-      ▼
-Laravel Backend
-      │
-      │ Validate Order
-      │ Validate Stock
-      │ Validate Machine
-      ▼
-READY_TO_DISPENSE
-      │
-      │ MQTT Publish
-      ▼
-Mosquitto
-      │
-      ▼
-Machine
-      │
-      ▼
-VALIDATING
-      │
-      ▼
-DISPENSING
-      │
-      ├──────────────► ERROR
-      │                  │
-      │                  ▼
-      │              Publish Error
-      │
-      ▼
-DONE
-      │
-      ▼
-Publish Response
-      │
-      ▼
-Laravel Backend
-      │
-      ▼
-COMPLETED
-```
-
----
-
-# 17. Telemetry Flow
-
-```text
-Sensor / Machine
-       │
-       │ Publish
-       ▼
-Mosquitto
-       │
-       ▼
-Laravel Backend
-       │
-       ├── Save Telemetry
-       ├── Update Machine Status
-       ├── Check Temperature
-       │
-       └── Notify Technician
-```
-
-Temperature threshold:
-
-```text
-Temperature <= Threshold
-        │
-        ▼
-       NORMAL
-
-Temperature > Threshold
-        │
-        ▼
-      WARNING
-        │
-        ▼
-Technician Notification
-```
-
----
-
-# 18. Stock Synchronization
-
-Stock pada database dan machine harus tetap konsisten.
-
-### Before Dispense
-
-```text
-Database Stock
-      │
-      ▼
-Validate Stock
-      │
-      ▼
-Send DISPENSE
-```
-
-### After Successful Dispense
-
-```text
-Machine
-   │
-   │ COMPLETED
-   ▼
-Laravel Backend
-   │
-   ▼
-Decrease Database Stock
-```
-
-Contoh:
-
-```text
-Before:
-Stock = 5
-
-Dispense:
-Quantity = 1
-
-After:
-Stock = 4
-```
-
-Database stock hanya dikurangi setelah machine memberikan response bahwa dispensing berhasil.
-
----
-
-# 19. MQTT Quality of Service
-
-QoS yang digunakan dapat dibedakan berdasarkan jenis message.
-
-### Command
-
-```text
-QoS = 1
-```
-
-Command harus memiliki kemungkinan diterima kembali apabila proses publish mengalami masalah.
-
-### Response
-
-```text
-QoS = 1
-```
-
-Response penting untuk mengetahui hasil command.
-
-### Error
-
-```text
-QoS = 1
-```
-
-Error harus memiliki tingkat reliability yang baik.
-
-### Telemetry
-
-```text
-QoS = 0
-```
-
-Telemetry dapat dikirim secara berkala dan tidak semua message harus diterima.
-
----
-
-# 20. Retained Messages
-
-Untuk status machine, retained message dapat digunakan agar subscriber baru dapat langsung menerima status terakhir machine.
-
-Contoh:
-
-```text
-vending/machine/VM001/status
-```
-
-dapat menggunakan:
-
-```text
-retain = true
-```
-
-Telemetry tidak perlu menggunakan retained message.
-
----
-
-# 21. MQTT Client Identity
-
-Setiap machine atau simulator harus memiliki client identifier yang unik.
-
-Contoh:
-
-```text
-vending-machine-VM001
-vending-simulator-VM001
-```
-
-Client ID tidak boleh sama pada waktu yang sama.
-
----
-
-# 22. Topic Rules
-
-Topic harus mengikuti format:
-
-```text
-vending/machine/{machine_id}/{channel}
-```
-
-Channel yang diperbolehkan:
-
-```text
-status
-telemetry
-command
-response
-error
-```
-
-Contoh valid:
-
-```text
-vending/machine/VM001/status
-vending/machine/VM001/telemetry
-vending/machine/VM001/command
-vending/machine/VM001/response
-vending/machine/VM001/error
-```
-
-Contoh tidak valid:
-
-```text
-machine/status
-vending/status
-VM001/command
-```
-
----
-
-# 23. Payload Rules
-
-Semua payload MQTT menggunakan JSON.
-
-Rules:
-
-```text
-1. JSON harus valid.
-2. Field name menggunakan snake_case.
-3. Enum/state menggunakan uppercase.
-4. Timestamp menggunakan ISO 8601.
-5. Machine identifier wajib tersedia pada payload jika diperlukan untuk tracing.
-6. Payload tidak boleh mengandung password atau secret.
-```
-
-Contoh:
-
-```json
-{
-    "machine_id": "VM001",
-    "state": "IDLE",
-    "timestamp": "2026-10-04T10:30:00Z"
-}
-```
-
----
-
-# 24. Invalid JSON Handling
-
-Jika machine menerima payload yang bukan JSON valid:
-
-```text
-MQTT Message
-      │
-      ▼
-Parse JSON
-      │
-      ├── Valid
-      │     │
-      │     ▼
-      │   Process
-      │
-      └── Invalid
-            │
-            ▼
-      Reject Command
-            │
-            ▼
-        Publish Error
-```
-
-Error:
-
-```json
-{
-    "machine_id": "VM001",
-    "error_code": "INVALID_COMMAND",
-    "message": "Invalid JSON payload",
-    "severity": "WARNING",
-    "timestamp": "2026-10-04T10:30:00Z"
-}
-```
-
----
-
-# 25. Duplicate Command Handling
-
-Command dispensing dapat diterima lebih dari satu kali karena QoS atau network retry.
-
-Machine harus menghindari dispensing ganda untuk order yang sama.
-
-`order_code` digunakan sebagai identifier proses.
-
-Contoh:
-
-```text
-Order:
-ORD-20261004-0001
-```
-
-Jika command yang sama diterima dua kali:
-
-```text
-First Command
-      │
-      ▼
-Process
-      │
-      ▼
-COMPLETED
-
-Second Command
-      │
-      ▼
-Detect Existing Order
-      │
-      ▼
-Reject Duplicate
-```
-
-Machine tidak boleh melakukan dispensing dua kali untuk order yang sama.
-
----
-
-# 26. Connection Monitoring
-
-Backend perlu mengetahui apakah machine masih aktif.
-
-Machine dapat mengirim status secara berkala.
-
-Contoh:
-
-```text
-Every N seconds
-      │
-      ▼
-Publish STATUS
-      │
-      ▼
-Backend updates machine activity
-```
-
-Jika tidak ada message dalam interval tertentu:
-
-```text
-No MQTT Message
-      │
-      ▼
-Connection Timeout
-      │
-      ▼
-Machine OFFLINE
-```
-
-Nilai timeout ditentukan pada implementasi berdasarkan kebutuhan sistem.
-
----
-
-# 27. Python Simulator Contract
-
-Python Simulator harus mengikuti MQTT contract yang sama dengan ESP32.
-
-Simulator harus dapat:
-
-### Subscribe
-
-```text
-vending/machine/{machine_id}/command
-```
-
-### Publish
-
-```text
-vending/machine/{machine_id}/status
-vending/machine/{machine_id}/telemetry
-vending/machine/{machine_id}/response
-vending/machine/{machine_id}/error
-```
-
-Contoh:
-
-```text
-Python Simulator
-      │
-      ├── Subscribe Command
-      │
-      ├── Simulate State Machine
-      │
-      ├── Simulate Dispense
-      │
-      ├── Publish Status
-      │
-      ├── Publish Telemetry
-      │
-      └── Publish Response / Error
-```
-
----
-
-# 28. ESP32 Contract
-
-ESP32 mengikuti contract yang sama dengan Python Simulator.
-
-ESP32 harus dapat:
-
-```text
-Subscribe:
-vending/machine/{machine_id}/command
-```
-
-dan publish:
-
-```text
-vending/machine/{machine_id}/status
-vending/machine/{machine_id}/telemetry
-vending/machine/{machine_id}/response
-vending/machine/{machine_id}/error
-```
-
-Perbedaan antara simulator dan ESP32 hanya berada pada implementasi hardware.
-
-```text
-                MQTT CONTRACT
-                     │
-          ┌──────────┴──────────┐
-          │                     │
-       Simulator              ESP32
-          │                     │
-      Software               Hardware
-     Simulation              Sensors
-     Actuators               Actuators
-```
-
----
-
-# 29. Security Considerations
-
-Development environment dapat menggunakan:
-
-```text
-localhost:1883
-```
-
-Production environment harus menggunakan authentication dan koneksi yang lebih aman.
-
-Credential MQTT harus disimpan sebagai environment variable.
-
-Contoh:
-
-```env
-MQTT_USERNAME=machine_user
-MQTT_PASSWORD=********
-```
-
-Credential tidak boleh:
-
-- Ditulis langsung pada source code
-- Di-commit ke Git
-- Dicantumkan dalam dokumentasi publik
-
----
-
-# 30. Testing Scenarios
-
-MQTT communication harus diuji dengan skenario berikut.
-
-## Scenario 1 — Connect
-
-```text
-Machine
-   │
-   ▼
-Connect Broker
-   │
-   ▼
-Publish ONLINE
-```
-
-## Scenario 2 — Dispense
-
-```text
-Backend
-   │
-   ▼
-DISPENSE Command
-   │
-   ▼
-Machine
-   │
-   ▼
-DISPENSING
-   │
-   ▼
-DONE
-   │
-   ▼
-COMPLETED Response
-```
-
-## Scenario 3 — Empty Slot
-
-```text
-DISPENSE
-   │
-   ▼
-SLOT_EMPTY
-   │
-   ▼
-ERROR
-   │
-   ▼
-Backend
-```
-
-## Scenario 4 — High Temperature
-
-```text
-Telemetry
-   │
-   ▼
-Temperature > Threshold
-   │
-   ▼
-WARNING
-   │
-   ▼
-Technician Notification
-```
-
-## Scenario 5 — Invalid JSON
-
-```text
-Invalid Message
-      │
-      ▼
-JSON Parse Failed
-      │
-      ▼
-INVALID_COMMAND
-```
-
-## Scenario 6 — Duplicate Command
-
-```text
-Same order_code
-      │
-      ▼
-Already Processed
-      │
-      ▼
-Reject Duplicate
-```
-
----
-
-# 31. Source of Truth
-
-Dokumen ini menjadi referensi utama untuk seluruh komunikasi MQTT pada sistem.
-
-Perubahan terhadap:
-
-- Topic
-- Payload
-- Command
-- Response
-- Error
-- QoS
-- State
-- Communication Flow
-
-harus diperbarui pada dokumen ini.
-
-Python Simulator dan ESP32 Firmware harus mengikuti contract ini agar keduanya dapat menggunakan backend dan MQTT Broker dengan protokol yang sama.
+Setelah inspeksi, perbarui contoh dan tabel dokumen ini agar sesuai kontrak final yang digunakan seluruh kelompok. **Dokumen ini tidak membuktikan bahwa topic atau skema contoh sudah diimplementasikan.**

@@ -1,810 +1,178 @@
-# Database Schema
+# Database Schema — Acuan Data Project
 
-## 1. Overview
+## 1. Tujuan dokumen
 
-Database digunakan sebagai pusat penyimpanan data untuk sistem vending machine.
+Dokumen ini mendefinisikan model data logis yang diperlukan untuk menghubungkan katalog, stok slot, order, status mesin, dan proses dispensing. Ini **bukan klaim bahwa semua tabel/kolom berikut sudah ada**. Sebelum menulis migration, periksa migration aktif, model Eloquent, relasi, seeder, dan data yang ada.
 
-Database menggunakan **PostgreSQL** dan dikelola melalui Laravel Backend.
+**Aturan:** jangan membuat migration duplikat atau mengubah nama kolom hanya agar cocok dengan dokumen ini. Bila skema aktual berbeda, perbarui dokumen ini atau buat rencana migrasi yang eksplisit.
 
-Database dibagi menjadi dua domain utama:
+## 2. Prinsip desain
 
-### Business Domain
+1. Database adalah sumber kebenaran bisnis untuk stok dan status order.
+2. Pilih satu sumber stok operasional yang otoritatif. Untuk mesin dengan slot fisik, pilihan yang disarankan adalah stok pada `machine_slots`.
+3. `products` menyimpan informasi produk; `machine_slots` menyimpan penempatan produk dan kuantitas fisik pada mesin tertentu.
+4. Jika project sekarang sudah memakai `products.stock`, jangan langsung menghapusnya. Audit penggunaannya terlebih dahulu dan tentukan apakah kolom itu stok total, stok per mesin, atau hanya data lama.
+5. Setiap order atau perintah dispensing harus memiliki identitas untuk mencegah diproses dua kali.
+6. Perubahan stok dan status order terkait harus konsisten/transaksional.
 
-Digunakan untuk mengelola:
+## 3. Entitas logis yang disarankan
 
-- User
-- Product
-- Category
-- Machine
-- Machine Slot
-- Order
-- Order Item
+### `users`
+Untuk pengguna dashboard dan/atau akun internal.
 
-### IoT Domain
-
-Digunakan untuk mengelola:
-
-- Machine Telemetry
-- Machine Error
-- Dispensing
-
----
-
-## 2. Database Architecture
-
-```text
-                        PostgreSQL
-                             │
-          ┌──────────────────┴──────────────────┐
-          │                                     │
-    BUSINESS DOMAIN                        IOT DOMAIN
-          │                                     │
-    ┌─────┴──────────┐                  ┌───────┴────────┐
-    │                │                  │                │
-   Users          Products           Telemetries      Errors
-    │                │                  │                │
-    │          Categories               │                │
-    │                                   │                │
-    └───────► Orders ◄──────────── Machines ◄────────────┘
-                  │                     │
-                  │                     │
-             Order Items          Machine Slots
-                                        │
-                                        ▼
-                                   Dispenses
-```
-
----
-
-# 3. Tables
-
-## 3.1 users
-
-Tabel `users` digunakan untuk menyimpan data pengguna internal sistem.
-
-Role disimpan langsung sebagai atribut pada tabel `users`.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID user |
-| name | VARCHAR(255) | NOT NULL | Nama user |
-| email | VARCHAR(255) | UNIQUE, NOT NULL | Email user |
-| password | VARCHAR(255) | NOT NULL | Password yang telah di-hash |
-| role | VARCHAR(50) | NOT NULL | Role user |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan data |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan data |
-
-### Allowed Roles
-
-```text
-admin
-technician
-operator
-```
-
-### Role Description
-
-| Role | Description |
+| Field logis | Keterangan |
 |---|---|
-| admin | Memiliki akses penuh terhadap sistem |
-| technician | Berfokus pada monitoring kondisi mesin |
-| operator | Mengelola produk, slot, dan stok |
+| `id` | Primary key. |
+| `name` | Nama pengguna. |
+| `email` | Identitas login yang unik bila login menggunakan email. |
+| `password` | Password hash; jangan simpan plaintext. |
+| `role` atau relasi role | Admin, Teknisi, atau Operator sesuai pola authorization project. |
+| `created_at`, `updated_at` | Timestamp Laravel. |
 
-Buyer tidak menjadi role dashboard internal.
+Gunakan struktur role yang sudah ada bila tersedia. Jangan memperkenalkan package role-permission baru tanpa kebutuhan.
 
----
+### `products`
+Menyimpan katalog produk.
 
-## 3.2 product_categories
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `name` | Nama produk. |
+| `sku`/`code` | Kode unik bila diperlukan. |
+| `description` | Deskripsi opsional. |
+| `price` | Harga; gunakan tipe presisi yang sesuai dan konsisten. |
+| `image` | Path/URL gambar sesuai pola aplikasi. |
+| `is_active` atau `status` | Apakah produk tersedia untuk ditampilkan/dipesan. |
+| timestamps | Timestamp Laravel. |
 
-Tabel `product_categories` digunakan untuk mengelompokkan produk.
+Fitur nutrisi/AI bukan scope utama. Jangan menambah kolom nutrisi kecuali kontrak integrasi dari kelompok lain sudah jelas.
 
-### Columns
+### `machines`
+Mewakili unit vending machine.
 
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID kategori |
-| name | VARCHAR(100) | UNIQUE, NOT NULL | Nama kategori |
-| description | TEXT | NULL | Deskripsi kategori |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `machine_code` | Identitas mesin yang unik, bila diperlukan. |
+| `name` | Nama/label mesin. |
+| `location` | Lokasi opsional. |
+| `status` | Status operasional; gunakan enum/string yang konsisten. |
+| `last_seen_at` | Waktu terakhir telemetry diterima, jika dibutuhkan. |
+| timestamps | Timestamp Laravel. |
 
-### Example
+Jika model `Machine.php` sudah ada, inspeksi dan pertahankan perilakunya. Jangan mengganti model tersebut secara menyeluruh tanpa alasan.
 
-```text
-Makanan
-Minuman
-Snack
-```
+### `machine_slots` (atau tabel slot dengan nama yang sudah ada)
+Mewakili slot fisik di mesin. Ini menjadi **sumber stok operasional yang disarankan** bila kuantitas perlu dilacak per slot.
 
----
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `machine_id` | Foreign key ke mesin. |
+| `product_id` | Produk yang saat ini ditempatkan pada slot; dapat nullable bila slot kosong. |
+| `slot_code` | Identitas slot pada mesin, unik dalam cakupan mesin. |
+| `stock` | Kuantitas yang tercatat untuk slot ini. |
+| `capacity` | Kapasitas maksimum opsional. |
+| `is_active` atau `status` | Apakah slot siap digunakan. |
+| timestamps | Timestamp Laravel. |
 
-## 3.3 products
+Constraint yang patut dipertimbangkan: kombinasi `(machine_id, slot_code)` unik; `stock >= 0`; `capacity >= stock` jika kapasitas digunakan. Implementasikan sesuai dukungan database dan pola migration project.
 
-Tabel `products` digunakan untuk menyimpan data produk yang dapat dijual melalui vending machine.
+### `orders`
+Mewakili order dari kiosk/layanan eksternal.
 
-### Columns
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key internal. |
+| `order_code` atau `external_order_id` | ID yang stabil untuk korelasi dan idempotensi. |
+| `payment_status` | Status pembayaran yang sudah diverifikasi. |
+| `status` | Status fulfillment, misalnya pending, ready, dispensing, completed, failed. Pisahkan dari status pembayaran. |
+| `total_amount` | Nilai transaksi bila order dikelola backend ini. |
+| `paid_at` | Waktu pembayaran terkonfirmasi. |
+| `stock_processed_at` atau penanda setara | Penanda bahwa stok untuk order telah diproses, jika dipakai untuk idempotensi. |
+| timestamps | Timestamp Laravel. |
 
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID produk |
-| category_id | BIGINT | FK, NOT NULL | ID kategori |
-| name | VARCHAR(255) | NOT NULL | Nama produk |
-| description | TEXT | NULL | Deskripsi produk |
-| price | NUMERIC(12,2) | NOT NULL | Harga produk |
-| image | VARCHAR(255) | NULL | Path atau URL gambar |
-| is_active | BOOLEAN | NOT NULL, DEFAULT TRUE | Status produk |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
+Gunakan penamaan status dan field yang konsisten dengan struktur nyata. Jangan mengubah status pembayaran dan status dispensing menjadi satu status ambigu.
 
-### Relationship
+### `order_items`
+Menyimpan produk/slot dan jumlah untuk setiap order.
 
-```text
-product_categories
-        │
-        │ 1:N
-        ▼
-     products
-```
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `order_id` | Foreign key ke order. |
+| `product_id` | Produk yang dipesan. |
+| `machine_slot_id` atau `slot_id` | Slot yang akan mengeluarkan produk, jika pemilihan slot dilakukan di backend. |
+| `quantity` | Jumlah unit. |
+| `unit_price` | Harga saat order dibuat bila dibutuhkan. |
+| timestamps | Timestamp Laravel. |
 
-Satu kategori dapat memiliki banyak produk.
+Simpan snapshot harga hanya jika backend memang bertanggung jawab atas total/riwayat harga. Hindari duplikasi data yang tidak diperlukan.
 
-Satu produk hanya memiliki satu kategori.
+### `dispense_logs` atau `dispense_commands`
+Merekam proses dan hasil dispensing.
 
----
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `order_id` | Order yang memicu dispensing, bila ada. |
+| `machine_id` | Mesin sasaran. |
+| `slot_id` | Slot sasaran. |
+| `command_id` | ID unik command untuk idempotensi/korelasi. |
+| `status` | queued, sent, dispensing, done, failed, atau status setara yang disepakati. |
+| `requested_at`, `started_at`, `finished_at` | Waktu lifecycle bila diperlukan. |
+| `result`/`error_code` | Hasil ringkas yang aman untuk audit. |
+| timestamps | Timestamp Laravel. |
 
-## 3.4 machines
+Gunakan struktur yang ada bila audit log telah disediakan di tabel lain. Hindari menyimpan payload sensitif secara utuh tanpa kebutuhan.
 
-Tabel `machines` digunakan untuk menyimpan data vending machine.
+### `machine_telemetries` (opsional)
+Menyimpan telemetry yang perlu diakses ulang, bukan hanya data terakhir.
 
-### Columns
+| Field logis | Keterangan |
+|---|---|
+| `id` | Primary key. |
+| `machine_id` | Mesin pengirim. |
+| `temperature` | Suhu yang dilaporkan. |
+| `machine_status` | Status mesin saat telemetry dikirim. |
+| `payload` | JSON terbatas bila dibutuhkan untuk diagnostik. |
+| `recorded_at` | Timestamp dari event dengan validasi yang wajar. |
+| timestamps | Timestamp Laravel. |
 
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID mesin |
-| machine_code | VARCHAR(50) | UNIQUE, NOT NULL | Kode unik mesin |
-| name | VARCHAR(100) | NOT NULL | Nama mesin |
-| location | VARCHAR(255) | NULL | Lokasi mesin |
-| status | VARCHAR(50) | NOT NULL | Status koneksi/kondisi mesin |
-| temperature_threshold | NUMERIC(5,2) | NOT NULL | Batas temperature mesin |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
+Jika hanya perlu menampilkan status terakhir, menyimpan `last_temperature`, `status`, dan `last_seen_at` pada mesin bisa lebih sederhana. Pilih satu rancangan berdasarkan kebutuhan, bukan membuat keduanya tanpa alasan.
 
-### Example
-
-```text
-machine_code:
-VM001
-
-name:
-Vending Machine Lobby
-
-location:
-Gedung A - Lantai 1
-
-temperature_threshold:
-80.00
-```
-
-### Machine Status
-
-Status machine dapat digunakan untuk menunjukkan kondisi koneksi mesin.
-
-Contoh:
-
-```text
-ONLINE
-OFFLINE
-```
-
-Status operasional seperti:
-
-```text
-IDLE
-VALIDATING
-DISPENSING
-DONE
-ERROR
-```
-
-disimpan sebagai state mesin pada telemetry atau data status mesin, bukan sebagai status koneksi.
-
----
-
-## 3.5 machine_slots
-
-Tabel `machine_slots` digunakan untuk menghubungkan produk dengan slot tertentu pada mesin.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID slot |
-| machine_id | BIGINT | FK, NOT NULL | ID mesin |
-| product_id | BIGINT | FK, NOT NULL | ID produk |
-| slot_code | VARCHAR(20) | NOT NULL | Kode slot |
-| stock | INTEGER | NOT NULL, DEFAULT 0 | Jumlah stok saat ini |
-| capacity | INTEGER | NOT NULL | Kapasitas maksimum slot |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
-
-### Relationship
+## 4. Relasi utama
 
 ```text
-machines
-    │
-    │ 1:N
-    ▼
-machine_slots
-    │
-    │ N:1
-    ▼
-products
+machines 1 ─── * machine_slots * ─── 1 products
+orders   1 ─── * order_items * ─── 1 products
+order_items * ─── 0..1 machine_slots
+orders   1 ─── * dispense_logs
+machines 1 ─── * dispense_logs
+machines 1 ─── * machine_telemetries (opsional)
 ```
 
-Satu mesin memiliki banyak slot.
-
-Satu slot berada pada satu mesin.
-
-Satu slot berisi satu produk pada satu waktu.
-
-### Example
-
-```text
-Machine VM001
-
-A01 → Nasi Goreng → Stock: 5 / 10
-A02 → Mie Goreng  → Stock: 3 / 10
-A03 → Ayam        → Stock: 7 / 10
-```
-
-### Business Rules
-
-```text
-stock >= 0
-stock <= capacity
-```
-
-Stok tidak boleh bernilai negatif dan tidak boleh melebihi kapasitas slot.
-
----
-
-# 4. Order Domain
-
-## 4.1 orders
-
-Tabel `orders` digunakan untuk menyimpan transaksi pembelian yang terjadi pada vending machine.
-
-Sistem vending machine hanya menangani data order dan status proses dispensing.
-
-Payment diproses oleh sistem/kelompok lain dan berada di luar scope core database.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID order |
-| order_code | VARCHAR(50) | UNIQUE, NOT NULL | Kode unik order |
-| machine_id | BIGINT | FK, NOT NULL | Mesin tempat pembelian |
-| status | VARCHAR(50) | NOT NULL | Status order |
-| total_amount | NUMERIC(12,2) | NOT NULL | Total harga order |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
-
-### Order Status
-
-```text
-PENDING
-READY_TO_DISPENSE
-DISPENSING
-COMPLETED
-FAILED
-```
-
-### Status Flow
-
-```text
-PENDING
-   │
-   ▼
-READY_TO_DISPENSE
-   │
-   ▼
-DISPENSING
-   │
-   ▼
-COMPLETED
-```
-
-Jika terjadi masalah:
-
-```text
-PENDING ─────────► FAILED
-
-READY_TO_DISPENSE ──► FAILED
-
-DISPENSING ───────► FAILED
-```
-
-### Payment Integration
-
-Payment tidak dikelola oleh tabel `payments` pada core system.
-
-Kelompok payment akan melakukan proses pembayaran dan memberikan informasi bahwa pembayaran telah berhasil.
-
-Setelah pembayaran berhasil, order dapat berubah menjadi:
-
-```text
-PENDING
-   │
-   │ Payment Success
-   ▼
-READY_TO_DISPENSE
-```
-
-Integrasi detail dengan kelompok payment akan ditentukan melalui REST API contract.
-
----
-
-## 4.2 order_items
-
-Tabel `order_items` digunakan untuk menyimpan detail produk dalam sebuah order.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID order item |
-| order_id | BIGINT | FK, NOT NULL | ID order |
-| product_id | BIGINT | FK, NOT NULL | ID produk |
-| slot_id | BIGINT | FK, NOT NULL | ID slot |
-| quantity | INTEGER | NOT NULL | Jumlah produk |
-| price | NUMERIC(12,2) | NOT NULL | Harga produk saat transaksi |
-| subtotal | NUMERIC(12,2) | NOT NULL | Total harga item |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan |
-
-### Relationship
-
-```text
-orders
-   │
-   │ 1:N
-   ▼
-order_items
-   │
-   ├────────► products
-   │
-   └────────► machine_slots
-```
-
-### Calculation
-
-```text
-subtotal = quantity × price
-```
-
-Total order:
-
-```text
-total_amount = SUM(order_items.subtotal)
-```
-
-Harga pada `order_items.price` disimpan sebagai snapshot harga pada saat order dibuat.
-
-Hal ini mencegah perubahan harga produk memengaruhi histori transaksi.
-
----
-
-# 5. IoT Domain
-
-## 5.1 telemetries
-
-Tabel `telemetries` digunakan untuk menyimpan data kondisi mesin yang dikirim melalui MQTT.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID telemetry |
-| machine_id | BIGINT | FK, NOT NULL | ID mesin |
-| temperature | NUMERIC(5,2) | NULL | Temperature mesin |
-| state | VARCHAR(50) | NOT NULL | State mesin |
-| door_status | VARCHAR(20) | NULL | Kondisi door |
-| created_at | TIMESTAMP | NOT NULL | Waktu telemetry diterima |
-
-### Machine State
-
-State machine utama:
-
-```text
-IDLE
-VALIDATING
-DISPENSING
-DONE
-ERROR
-```
-
-### Door Status
-
-Contoh:
-
-```text
-OPEN
-CLOSED
-```
-
-### Example Telemetry
-
-```json
-{
-    "temperature": 72.5,
-    "state": "IDLE",
-    "door": "CLOSED"
-}
-```
-
-Telemetry digunakan untuk monitoring dan histori kondisi mesin.
-
----
-
-## 5.2 machine_errors
-
-Tabel `machine_errors` digunakan untuk mencatat error yang terjadi pada mesin.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID error |
-| machine_id | BIGINT | FK, NOT NULL | ID mesin |
-| error_code | VARCHAR(100) | NOT NULL | Kode error |
-| message | TEXT | NOT NULL | Pesan error |
-| severity | VARCHAR(20) | NOT NULL | Tingkat severity |
-| created_at | TIMESTAMP | NOT NULL | Waktu error |
-| resolved_at | TIMESTAMP | NULL | Waktu error diselesaikan |
-
-### Example Error Code
-
-```text
-TEMPERATURE_HIGH
-DISPENSER_JAM
-SLOT_EMPTY
-MQTT_ERROR
-```
-
-### Severity
-
-```text
-INFO
-WARNING
-CRITICAL
-```
-
-### Error Flow
-
-```text
-Machine
-   │
-   │ MQTT Error
-   ▼
-Laravel Backend
-   │
-   ▼
-machine_errors
-   │
-   ▼
-Technician Monitoring
-```
-
----
-
-## 5.3 dispenses
-
-Tabel `dispenses` digunakan untuk mencatat proses pengeluaran produk dari mesin.
-
-### Columns
-
-| Column | Type | Constraint | Description |
-|---|---|---|---|
-| id | BIGSERIAL | PK | ID dispense |
-| order_id | BIGINT | FK, NOT NULL | ID order |
-| machine_id | BIGINT | FK, NOT NULL | ID mesin |
-| slot_id | BIGINT | FK, NOT NULL | ID slot |
-| status | VARCHAR(50) | NOT NULL | Status dispensing |
-| started_at | TIMESTAMP | NULL | Waktu proses dimulai |
-| completed_at | TIMESTAMP | NULL | Waktu proses selesai |
-| created_at | TIMESTAMP | NULL | Waktu pembuatan record |
-| updated_at | TIMESTAMP | NULL | Waktu perubahan record |
-
-### Dispense Status
-
-```text
-PENDING
-DISPENSING
-COMPLETED
-FAILED
-```
-
-### Dispense Flow
-
-```text
-READY_TO_DISPENSE
-        │
-        ▼
-     DISPENSE
-        │
-        ▼
-   DISPENSING
-        │
-        ├──────────────► FAILED
-        │
-        ▼
-    COMPLETED
-```
-
----
-
-# 6. Entity Relationships
-
-Relationship utama database:
-
-```text
-users
-  │
-  └── role
-
-product_categories
-  │
-  └── products
-          │
-          │
-          └──────────────┐
-                         │
-machines ── machine_slots
-    │                    │
-    │                    │
-    │                    └── products
-    │
-    ├── telemetries
-    │
-    ├── machine_errors
-    │
-    ├── orders
-    │      │
-    │      └── order_items
-    │              │
-    │              ├── products
-    │              └── machine_slots
-    │
-    └── dispenses
-           │
-           ├── orders
-           └── machine_slots
-```
-
----
-
-# 7. Foreign Key Relationships
-
-| Table | Foreign Key | References |
-|---|---|---|
-| products | category_id | product_categories.id |
-| machine_slots | machine_id | machines.id |
-| machine_slots | product_id | products.id |
-| orders | machine_id | machines.id |
-| order_items | order_id | orders.id |
-| order_items | product_id | products.id |
-| order_items | slot_id | machine_slots.id |
-| telemetries | machine_id | machines.id |
-| machine_errors | machine_id | machines.id |
-| dispenses | order_id | orders.id |
-| dispenses | machine_id | machines.id |
-| dispenses | slot_id | machine_slots.id |
-
----
-
-# 8. Relationship Summary
-
-### Product Category → Products
-
-```text
-1 Category
-   │
-   └─── N Products
-```
-
-### Machine → Machine Slots
-
-```text
-1 Machine
-   │
-   └─── N Slots
-```
-
-### Product → Machine Slots
-
-```text
-1 Product
-   │
-   └─── N Machine Slots
-```
-
-Dalam implementasi normal, satu produk dapat ditempatkan pada beberapa slot atau mesin.
-
-### Machine → Orders
-
-```text
-1 Machine
-   │
-   └─── N Orders
-```
-
-### Order → Order Items
-
-```text
-1 Order
-   │
-   └─── N Order Items
-```
-
-### Machine → Telemetries
-
-```text
-1 Machine
-   │
-   └─── N Telemetries
-```
-
-### Machine → Errors
-
-```text
-1 Machine
-   │
-   └─── N Errors
-```
-
-### Order → Dispenses
-
-```text
-1 Order
-   │
-   └─── N Dispenses
-```
-
----
-
-# 9. Core Business Rules
-
-## 9.1 Product
-
-- Product harus memiliki kategori.
-- Product memiliki harga.
-- Product dapat diaktifkan atau dinonaktifkan.
-- Product yang tidak aktif tidak dapat digunakan untuk transaksi baru.
-
-## 9.2 Machine Slot
-
-- Setiap slot harus dimiliki oleh satu machine.
-- Setiap slot mengacu pada satu product.
-- Stock tidak boleh negatif.
-- Stock tidak boleh melebihi capacity.
-
-## 9.3 Order
-
-- Setiap order memiliki `order_code` unik.
-- Order harus terkait dengan machine.
-- Order memiliki minimal satu order item.
-- Total order berasal dari total subtotal order item.
-- Order hanya dapat masuk proses dispensing setelah status siap untuk dispense.
-
-## 9.4 Dispensing
-
-- Dispensing harus memiliki order.
-- Dispensing harus memiliki machine.
-- Dispensing harus memiliki slot.
-- Stock harus tersedia sebelum dispensing.
-- Jika dispensing berhasil, stock slot dikurangi.
-- Jika dispensing gagal, sistem mencatat error dan order dapat berubah menjadi `FAILED`.
-
-## 9.5 Telemetry
-
-- Telemetry harus terkait dengan machine.
-- Data telemetry dikirim oleh machine melalui MQTT.
-- Telemetry digunakan untuk monitoring dan histori kondisi mesin.
-
-## 9.6 Machine Error
-
-- Error harus terkait dengan machine.
-- Error yang belum diselesaikan memiliki `resolved_at = NULL`.
-- Error dengan severity tinggi dapat digunakan sebagai dasar notifikasi kepada Technician.
-
----
-
-# 10. Database Scope
-
-Database versi awal hanya mencakup core vending machine system.
-
-### Included
-
-```text
-✓ Users
-✓ Role management melalui users.role
-✓ Product
-✓ Product Category
-✓ Machine
-✓ Machine Slot
-✓ Stock
-✓ Order
-✓ Order Item
-✓ Telemetry
-✓ Machine Error
-✓ Dispense
-```
-
-### Not Included
-
-Fitur berikut berada di luar scope core system:
-
-```text
-✗ Payment Processing
-✗ Payment Gateway
-✗ Payment UI
-✗ Refund System
-✗ AI Nutritional Analysis
-✗ Product Nutrition Database
-```
-
-Fitur tersebut dapat ditambahkan pada pengembangan berikutnya melalui integrasi dengan sistem eksternal atau penambahan module baru.
-
----
-
-# 11. Future Extension
-
-Database dirancang agar dapat dikembangkan tanpa mengubah core architecture secara besar.
-
-Contoh pengembangan berikutnya:
-
-```text
-Current Core
-     │
-     ├──────────────► Payment Integration
-     │
-     ├──────────────► AI Nutrition
-     │
-     ├──────────────► Notification System
-     │
-     └──────────────► Advanced Analytics
-```
-
-Contoh kemungkinan tabel tambahan di masa depan:
-
-```text
-payments
-product_nutrition
-refunds
-notifications
-```
-
-Tabel tersebut **tidak menjadi bagian dari database core versi awal**.
-
----
-
-# 12. Source of Truth
-
-Dokumen ini menjadi referensi utama untuk struktur database.
-
-Setiap perubahan terhadap:
-
-- Table
-- Column
-- Data Type
-- Primary Key
-- Foreign Key
-- Relationship
-- Business Rule
-
-harus diperbarui pada dokumen ini sebelum atau bersamaan dengan perubahan implementasi database.
-
-Laravel migrations dan Eloquent Models harus mengikuti struktur yang telah didefinisikan pada dokumen ini.
+Relasi aktual bisa berbeda; gunakan foreign key dan relasi Eloquent yang konsisten.
+
+## 5. Alur stok yang aman
+
+- Verifikasi bahwa order dibayar melalui mekanisme tepercaya.
+- Dalam transaction, baca/lock record stok yang relevan dan pastikan kuantitas mencukupi.
+- Terapkan pengurangan/reservasi sekali saja berdasarkan ID order atau idempotency key.
+- Tandai perubahan stok/order dalam transaction yang sama jika skemanya mendukung.
+- Setelah commit, terbitkan perintah ke MQTT/queue. Jangan menahan transaction database tetap terbuka selama menunggu hardware.
+- Catat command ID dan update status dari event simulator/perangkat.
+- Untuk command duplikat, gunakan ID yang sama dan jangan mengurangi stok lagi.
+- Untuk kegagalan/timeout, tandai status untuk rekonsiliasi. Jangan mengembalikan stok secara otomatis tanpa aturan bisnis yang jelas dan konfirmasi bahwa produk tidak keluar.
+
+## 6. Sebelum membuat migration
+
+Checklist:
+
+- [ ] Baca semua migration terkait produk, mesin, slot, order, dan users.
+- [ ] Cek model serta relasi Eloquent.
+- [ ] Cek controller/service yang membaca atau mengubah stok.
+- [ ] Cari semua referensi `stock`, `slot`, `order`, dan `machine`.
+- [ ] Pastikan data lama tidak hilang dan migration bisa di-rollback bila sesuai.
+- [ ] Tambahkan/ubah test untuk stok kosong, stok bersamaan, order duplikat, dan pembayaran belum berhasil.
+- [ ] Update dokumen setelah skema final diverifikasi.

@@ -226,6 +226,13 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+        if (! $machineId) {
+            $this->warn(
+                '[MQTT] Error message has missing or invalid machine_id.'
+            );
+
+            return;
+        }
         $state = $payload['state'] ?? null;
         $dispenseId = $payload['dispense_id'] ?? null;
 
@@ -254,7 +261,8 @@ class MqttListenCommand extends Command
             && $dispenseId !== null
         ) {
             $this->completeDispense(
-                (int) $dispenseId
+                (int) $dispenseId,
+                $machineId
             );
 
             return;
@@ -289,6 +297,13 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+        if (! $machineId) {
+            $this->warn(
+                '[MQTT] Error message has missing or invalid machine_id.'
+            );
+
+            return;
+        }
 
         if ($machineId) {
             /*
@@ -314,7 +329,8 @@ class MqttListenCommand extends Command
         }
 
         $this->failDispense(
-            (int) $dispenseId
+            (int) $dispenseId,
+            $machineId
         );
     }
 
@@ -333,6 +349,13 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+        if (! $machineId) {
+            $this->warn(
+                '[MQTT] Error message has missing or invalid machine_id.'
+            );
+
+            return;
+        }
         $temperature = $payload['temperature'] ?? null;
 
         if (
@@ -388,6 +411,13 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+        if (! $machineId) {
+            $this->warn(
+                '[MQTT] Error message has missing or invalid machine_id.'
+            );
+
+            return;
+        }
         $slotCode = $payload['slot'] ?? null;
         $currentQty = $payload['current_qty'] ?? null;
 
@@ -429,10 +459,16 @@ class MqttListenCommand extends Command
         /*
          * Never allow telemetry to overwrite a reservation.
          */
+        /*
+ * Inventory MQTT is telemetry only.
+ * The database remains the source of truth for business stock.
+ * Never update current_qty from simulator telemetry.
+ */
+
         if ($currentQty < $slot->hold_qty) {
             $this->warn(
-                "[MQTT] Inventory rejected for {$slotCode}: "
-                    . "current_qty {$currentQty} is below hold_qty {$slot->hold_qty}."
+                "[MQTT] Reported inventory for {$slotCode} "
+                    . "is below hold_qty. Database stock remains unchanged."
             );
 
             return;
@@ -440,53 +476,31 @@ class MqttListenCommand extends Command
 
         if ($currentQty > $slot->capacity) {
             $this->warn(
-                "[MQTT] Inventory rejected for {$slotCode}: "
-                    . "current_qty exceeds capacity."
+                "[MQTT] Reported inventory for {$slotCode} "
+                    . "exceeds capacity. Database stock remains unchanged."
             );
 
             return;
         }
 
-        DB::transaction(function () use (
-            $slot,
-            $currentQty
-        ) {
-            $lockedSlot = MachineSlot::query()
-                ->whereKey($slot->id)
-                ->lockForUpdate()
-                ->first();
-
-            if (! $lockedSlot) {
-                return;
-            }
-
-            if ($currentQty < $lockedSlot->hold_qty) {
-                return;
-            }
-
-            if ($currentQty > $lockedSlot->capacity) {
-                return;
-            }
-
-            $lockedSlot->update([
-                'current_qty' => $currentQty,
-            ]);
-        });
-
         $this->info(
-            "[MQTT] Inventory updated: "
+            "[MQTT] Inventory telemetry received "
+                . "(business stock unchanged): "
                 . "machine={$machineId}, "
                 . "slot={$slotCode}, "
-                . "current_qty={$currentQty}"
+                . "reported_qty={$currentQty}, "
+                . "database_current_qty={$slot->current_qty}"
         );
     }
 
     private function completeDispense(
-        int $dispenseId
+        int $dispenseId,
+        int $machineId
     ): void {
         $dispense = Dispense::query()
-            ->find($dispenseId);
-
+            ->whereKey($dispenseId)
+            ->where('machine_id', $machineId)
+            ->first();
         if (! $dispense) {
             $this->warn(
                 "[MQTT] Dispense {$dispenseId} not found."
@@ -527,10 +541,14 @@ class MqttListenCommand extends Command
     }
 
     private function failDispense(
-        int $dispenseId
+        int $dispenseId,
+        int $machineId
+
     ): void {
         $dispense = Dispense::query()
-            ->find($dispenseId);
+            ->whereKey($dispenseId)
+            ->where('machine_id', $machineId)
+            ->first();
 
         if (! $dispense) {
             $this->warn(

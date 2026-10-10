@@ -16,21 +16,18 @@ class OrderService
         int $machineId,
         array $items
     ): Order {
+        if (count($items) !== 1) {
+            throw ValidationException::withMessages([
+                'items' => [
+                    'An order must contain exactly one item.',
+                ],
+            ]);
+        }
+
         return DB::transaction(function () use (
             $machineId,
             $items
         ) {
-            $slotIds = collect($items)
-                ->pluck('slot_id')
-                ->map(fn ($id) => (int) $id);
-
-            if ($slotIds->duplicates()->isNotEmpty()) {
-                throw ValidationException::withMessages([
-                    'items' => [
-                        'Each slot can only appear once in an order.',
-                    ],
-                ]);
-            }
 
             $machine = Machine::query()
                 ->whereKey($machineId)

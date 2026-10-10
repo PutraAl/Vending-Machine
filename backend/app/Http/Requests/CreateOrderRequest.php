@@ -23,7 +23,7 @@ class CreateOrderRequest extends FormRequest
             'items' => [
                 'required',
                 'array',
-                'min:1',
+                'size:1',
             ],
 
             'items.*.product_id' => [

@@ -1,664 +1,130 @@
-# System Overview
+# System Overview — Sistem Perangkat Lunak Mesin Makanan Panas Otomatis
 
-## 1. Project
+## 1. Ringkasan
 
-**Nama:** Sistem Perangkat Lunak Mesin Penjual Makanan Panas Otomatis
+Project ini mengembangkan perangkat lunak pendukung vending machine makanan panas berbasis IoT. Backend Laravel bertanggung jawab atas data katalog, stok, pesanan yang siap diproses, status mesin, hak akses, dan API. Simulator Python/MQTT merepresentasikan perangkat mesin untuk menguji komunikasi, telemetry, dan proses dispensing.
 
-Sistem ini merupakan platform vending machine yang digunakan untuk mengelola produk, stok, mesin, transaksi, pembayaran, monitoring kondisi mesin, dan proses dispensing makanan secara otomatis.
+Dokumen ini menjelaskan arsitektur target. Detail yang tidak tercermin di kode aktif harus diverifikasi sebelum implementasi dilakukan.
 
-Sistem terdiri dari aplikasi backend, dashboard, database, MQTT communication, Python simulator, dan ESP32 firmware.
+## 2. Tujuan sistem
 
----
+- Menyediakan data produk dan stok yang konsisten untuk dashboard dan frontend kiosk.
+- Memastikan mesin hanya menerima perintah dispensing yang valid.
+- Mengikuti stok yang tercatat di database, bukan stok hard-coded di simulator.
+- Memantau status mesin dan suhu secara berkelanjutan.
+- Memungkinkan tim lain mengintegrasikan kiosk dan pembayaran melalui kontrak API yang jelas.
+- Menyediakan dashboard untuk monitoring operasional dan pengelolaan sesuai role.
 
-## 2. Main Architecture
+## 3. Scope
 
-```text
-                    ┌──────────────────────┐
-                    │      Dashboard       │
-                    │ Laravel + Livewire   │
-                    │      + Tailwind      │
-                    └──────────┬───────────┘
-                               │
-                               │ HTTP / REST API
-                               ▼
-                    ┌──────────────────────┐
-                    │    Laravel Backend   │
-                    │                      │
-                    │ Business Logic       │
-                    │ Authentication       │
-                    │ Authorization        │
-                    │ REST API             │
-                    │ MQTT Integration     │
-                    └───────┬───────┬──────┘
-                            │       │
-                   PostgreSQL       │ MQTT
-                            │       │
-                   ┌────────▼───┐   │
-                   │ PostgreSQL │   │
-                   │  Database  │   │
-                   └────────────┘   │
-                                    ▼
-                           ┌─────────────────┐
-                           │ Mosquitto Broker│
-                           └────────┬────────┘
-                                    │
-                       ┌────────────┴────────────┐
-                       │                         │
-                ┌──────▼──────┐           ┌──────▼──────┐
-                │   Python    │           │    ESP32    │
-                │  Simulator  │           │   Firmware  │
-                └─────────────┘           └─────────────┘
-```
+### Dalam scope
 
-### Communication
+- Backend Laravel 12 dan REST API.
+- CRUD katalog produk dan pengaturan slot.
+- Alur validasi pesanan/pembayaran eksternal sebelum dispensing.
+- Sinkronisasi stok database dengan simulator/perangkat.
+- State machine dispensing.
+- MQTT telemetry dan event perangkat.
+- Dashboard Admin, Teknisi, dan Operator.
+- Authentication, authorization, automated tests, serta dokumentasi API.
 
-Sistem menggunakan beberapa jalur komunikasi:
+### Di luar scope utama
 
-- Dashboard berkomunikasi dengan Laravel Backend melalui HTTP/REST API.
-- Laravel Backend berkomunikasi dengan PostgreSQL untuk penyimpanan data.
-- Laravel Backend berkomunikasi dengan mesin melalui MQTT.
-- Mosquitto bertindak sebagai MQTT Broker.
-- Python Simulator digunakan untuk mensimulasikan perangkat mesin.
-- ESP32 Firmware digunakan sebagai implementasi perangkat keras sebenarnya.
+- Implementasi payment gateway milik kelompok pembayaran. Backend hanya mengintegrasikan hasil pembayaran lewat mekanisme yang disepakati.
+- AI nutrisi/analisis nutrisi milik kelompok lain. Kolom nutrisi tidak perlu ditambahkan tanpa kebutuhan integrasi yang nyata.
+- Pembuatan ulang frontend kiosk kelompok lain. Fokusnya menyediakan dan menjaga kontrak API.
 
----
-
-## 3. Main Components
-
-### 3.1 Backend
-
-Backend menggunakan:
-
-- Laravel
-- PHP
-- REST API
-- Authentication
-- Authorization
-- MQTT Integration
-
-Backend bertanggung jawab terhadap:
-
-- Business logic
-- Pengelolaan user dan role
-- Pengelolaan produk
-- Pengelolaan kategori produk
-- Pengelolaan mesin
-- Pengelolaan slot mesin
-- Pengelolaan stok
-- Pengelolaan transaksi
-- Pengelolaan pembayaran
-- Monitoring mesin
-- Penyimpanan telemetry
-- Penyimpanan error mesin
-- Proses dispensing
-- Penyediaan REST API
-
----
-
-### 3.2 Dashboard
-
-Dashboard dibangun menggunakan:
-
-- Laravel Blade
-- Livewire
-- Tailwind CSS
-
-Dashboard digunakan oleh user internal berdasarkan role.
-
-#### Admin / Super Admin
-
-Memiliki akses penuh terhadap sistem.
-
-Dapat mengelola:
-
-- User
-- Role
-- Produk
-- Kategori
-- Mesin
-- Slot mesin
-- Stok
-- Transaksi
-- Pembayaran
-- Monitoring mesin
-- Data telemetry
-- Error mesin
-
-#### Technician
-
-Berfokus pada monitoring kondisi mesin.
-
-Dapat melihat:
-
-- Status online/offline mesin
-- Temperature
-- Machine state
-- Kondisi door
-- Error mesin
-- Telemetry
-
-Technician juga menerima informasi atau notifikasi apabila kondisi mesin mengalami masalah, seperti temperature melebihi batas yang ditentukan.
-
-#### Seller / Operator
-
-Berfokus pada pengelolaan produk dan stok.
-
-Dapat melakukan:
-
-- Pengelolaan produk
-- Pengelolaan stok
-- Pengelolaan slot mesin
-- Monitoring stok mesin
-
-#### Buyer
-
-Buyer merupakan pengguna yang melakukan pembelian makanan melalui mesin.
-
-Buyer tidak membutuhkan dashboard internal sistem.
-
----
-
-### 3.3 PostgreSQL
-
-PostgreSQL digunakan sebagai database utama sistem.
-
-Database menyimpan data:
-
-#### Business Domain
-
-- Users
-- Roles
-- Products
-- Product Categories
-- Orders
-- Order Items
-- Payments
-- Refunds
-
-#### IoT Domain
-
-- Machines
-- Machine Slots
-- Telemetries
-- Machine Errors
-- Dispenses
-
-Database digunakan sebagai penyimpanan data utama yang dapat diakses oleh Laravel Backend.
-
----
-
-### 3.4 MQTT Broker
-
-MQTT Broker menggunakan Mosquitto.
-
-Mosquitto berfungsi sebagai perantara komunikasi antara backend dengan perangkat mesin.
-
-Komunikasi menggunakan konsep publish dan subscribe.
-
-Contoh komunikasi:
+## 4. Arsitektur logis
 
 ```text
-Laravel Backend
-      │
-      │ Publish Command
-      ▼
-Mosquitto Broker
-      │
-      ▼
-ESP32 / Python Simulator
+Frontend Kiosk / Tim Pembayaran
+            |
+            | HTTPS REST API / status pembayaran terverifikasi
+            v
+      Laravel 12 Backend
+      - Authentication & Roles
+      - Product Catalog
+      - Orders / Payment State Integration
+      - Inventory & Slot Management
+      - Dispense Orchestration
+      - Machine Status API
+            |
+            +------ Database
+            |        - Users / Roles
+            |        - Products
+            |        - Machines / Slots
+            |        - Orders / Order Items
+            |        - Dispense Logs / Telemetry
+            |
+            +------ MQTT Broker (Mosquitto)
+                         |
+                         v
+                Python Simulator / Hardware
+                - Telemetry: temperature/status
+                - Receive dispense command
+                - Report progress/result
 ```
 
-Untuk telemetry:
-
-```text
-ESP32 / Python Simulator
-      │
-      │ Publish Telemetry
-      ▼
-Mosquitto Broker
-      │
-      ▼
-Laravel Backend
-```
-
----
-
-### 3.5 Python Simulator
-
-Python Simulator digunakan untuk mensimulasikan perilaku mesin vending sebelum menggunakan perangkat keras sebenarnya.
-
-Simulator bertanggung jawab untuk mensimulasikan:
-
-- Machine state
-- Temperature
-- Stock
-- Slot
-- Dispensing
-- Error
-- Telemetry
-
-Simulator berkomunikasi dengan sistem menggunakan MQTT.
-
-Tujuan simulator:
-
-- Menguji komunikasi MQTT
-- Menguji machine state machine
-- Menguji proses dispensing
-- Menguji telemetry
-- Menguji error handling
-- Menguji integrasi backend dengan mesin
-
----
-
-### 3.6 ESP32 Firmware
-
-ESP32 merupakan perangkat keras yang digunakan sebagai controller mesin.
-
-ESP32 bertanggung jawab terhadap:
-
-- Membaca sensor
-- Mengontrol actuator
-- Mengelola machine state
-- Mengirim telemetry
-- Menerima command
-- Menjalankan proses dispensing
-- Mengirim error
-
-ESP32 berkomunikasi dengan backend melalui MQTT Broker.
-
----
-
-## 4. Machine State Machine
-
-Mesin berada dalam kondisi panas secara terus-menerus.
-
-Sistem tidak menggunakan state `HEATING` karena proses pemanasan bukan bagian dari alur dispensing.
-
-State machine utama:
-
-```text
-             ┌─────────────┐
-             │    IDLE     │
-             └──────┬──────┘
-                    │
-                    ▼
-             ┌─────────────┐
-             │ VALIDATING  │
-             └──────┬──────┘
-                    │
-                    ▼
-             ┌─────────────┐
-             │ DISPENSING  │
-             └──────┬──────┘
-                    │
-                    ▼
-             ┌─────────────┐
-             │    DONE     │
-             └──────┬──────┘
-                    │
-                    ▼
-             ┌─────────────┐
-             │    IDLE     │
-             └─────────────┘
-```
-
-Jika terjadi masalah:
-
-```text
-VALIDATING ───────► ERROR
-DISPENSING ───────► ERROR
-ERROR ────────────► IDLE
-```
-
-### State Description
-
-#### IDLE
-
-Mesin dalam kondisi siap menerima transaksi atau command baru.
-
-#### VALIDATING
-
-Mesin melakukan validasi sebelum proses dispensing.
-
-Validasi dapat mencakup:
-
-- Ketersediaan produk
-- Ketersediaan stok
-- Kondisi slot
-- Kondisi mesin
-- Temperature
-- Validitas command
-
-#### DISPENSING
-
-Mesin menjalankan proses pengeluaran makanan dari slot yang dipilih.
-
-#### DONE
-
-Proses dispensing berhasil diselesaikan.
-
-Setelah proses selesai, mesin kembali ke `IDLE`.
-
-#### ERROR
-
-Terjadi masalah dalam proses validasi atau dispensing.
-
-Setelah error ditangani atau proses dihentikan, mesin dapat kembali ke `IDLE`.
-
----
-
-## 5. Temperature Monitoring
-
-Mesin selalu berada dalam kondisi panas.
-
-Temperature bukan merupakan state machine, tetapi merupakan telemetry atau kondisi mesin yang terus dipantau.
-
-Contoh telemetry:
-
-```json
-{
-    "temperature": 72.5,
-    "state": "IDLE",
-    "door": "CLOSED",
-    "stock": 5
-}
-```
-
-Sistem dapat menggunakan temperature threshold untuk mendeteksi kondisi mesin.
-
-Contoh:
-
-```text
-Temperature <= Threshold
-        │
-        ▼
-     NORMAL
-
-Temperature > Threshold
-        │
-        ▼
-     WARNING
-        │
-        ▼
-Technician Notification
-```
-
-Temperature threshold dapat digunakan untuk memberikan informasi atau notifikasi kepada Technician apabila temperature berada di luar batas yang ditentukan.
-
----
-
-## 6. MQTT Topic Structure
-
-MQTT menggunakan topic berdasarkan `machine_id`.
-
-Format topic:
-
-```text
-vending/machine/{machine_id}/status
-vending/machine/{machine_id}/telemetry
-vending/machine/{machine_id}/command
-vending/machine/{machine_id}/response
-vending/machine/{machine_id}/error
-```
-
-### Status
-
-Digunakan untuk mengirim status mesin.
-
-```json
-{
-    "state": "IDLE"
-}
-```
-
-### Telemetry
-
-Digunakan untuk mengirim data kondisi mesin.
-
-```json
-{
-    "temperature": 72.5,
-    "state": "IDLE",
-    "door": "CLOSED",
-    "stock": 5
-}
-```
-
-### Command
-
-Digunakan untuk memberikan perintah kepada mesin.
-
-Contoh command dispensing:
-
-```json
-{
-    "command": "DISPENSE",
-    "slot": "A01"
-}
-```
-
-### Response
-
-Digunakan untuk memberikan response dari mesin terhadap command yang diterima.
-
-### Error
-
-Digunakan untuk mengirim informasi error dari mesin.
-
-Contoh:
-
-```json
-{
-    "error": "TEMPERATURE_HIGH"
-}
-```
-
----
-
-## 7. Main User Roles
-
-Sistem memiliki tiga role utama untuk dashboard:
-
-```text
-ADMIN / SUPER ADMIN
-        │
-        ├── Full System Management
-        │
-        ├── User Management
-        ├── Product Management
-        ├── Machine Management
-        ├── Transaction Management
-        └── Monitoring
-
-TECHNICIAN
-        │
-        ├── Machine Monitoring
-        ├── Temperature Monitoring
-        ├── Error Monitoring
-        └── Machine Status
-
-SELLER / OPERATOR
-        │
-        ├── Product Management
-        ├── Stock Management
-        └── Machine Slot Management
-```
-
-Buyer tidak termasuk sebagai role dashboard internal.
-
-Buyer hanya melakukan pembelian melalui vending machine.
-
----
-
-## 8. Main Business Flow
-
-Alur utama pembelian:
-
-```text
-Buyer
-  │
-  ▼
-Select Product
-  │
-  ▼
-Check Product & Stock
-  │
-  ▼
-Create Order
-  │
-  ▼
-Payment
-  │
-  ▼
-Payment Confirmed
-  │
-  ▼
-Send DISPENSE Command
-  │
-  ▼
-Machine VALIDATING
-  │
-  ▼
-Machine DISPENSING
-  │
-  ▼
-Machine DONE
-  │
-  ▼
-Order Completed
-```
-
-Jika terjadi error:
-
-```text
-Machine
-   │
-   ▼
-ERROR
-   │
-   ├── Send Error via MQTT
-   │
-   ▼
-Laravel Backend
-   │
-   ├── Save Machine Error
-   │
-   └── Notify Technician
-```
-
----
-
-## 9. Development Architecture
-
-Project menggunakan struktur monorepo.
-
-```text
-Vending-Machine-System/
-│
-├── backend/
-│   └── Laravel Application
-│
-├── simulator/
-│   └── Python MQTT Simulator
-│
-├── firmware/
-│   └── ESP32 Firmware
-│
-├── mosquitto/
-│   └── MQTT Broker Configuration
-│
-├── docs/
-│   ├── SYSTEM_OVERVIEW.md
-│   ├── DATABASE_SCHEMA.md
-│   ├── API_SPECIFICATION.md
-│   ├── MQTT_CONTRACT.md
-│   ├── ROLE_PERMISSION.md
-│   └── CODING_GUIDELINE.md
-│
-├── docker-compose.yml
-└── README.md
-```
-
-### Backend Structure
-
-Laravel menjadi pusat aplikasi sistem.
-
-```text
-backend/
-├── app/
-├── bootstrap/
-├── config/
-├── database/
-├── public/
-├── resources/
-├── routes/
-├── storage/
-├── tests/
-├── artisan
-├── composer.json
-└── package.json
-```
-
-Database migration, model, controller, service, API, Blade, Livewire, dan asset frontend berada di dalam backend Laravel.
-
----
-
-## 10. Development Principles
-
-Pengembangan sistem mengikuti beberapa prinsip:
-
-### 10.1 API First
-
-Backend menyediakan REST API yang dapat digunakan oleh sistem atau client lain.
-
-### 10.2 MQTT for Machine Communication
-
-Komunikasi antara backend dengan mesin menggunakan MQTT.
-
-### 10.3 Modular Architecture
-
-Setiap bagian sistem dipisahkan berdasarkan tanggung jawabnya:
-
-- Backend
-- Simulator
-- Firmware
-- MQTT
-- Database
-- Documentation
-
-### 10.4 Source of Truth
-
-Dokumentasi pada folder `docs/` digunakan sebagai referensi utama dalam pengembangan sistem.
-
-Dokumen harus diperbarui apabila terdapat perubahan pada:
-
-- Architecture
-- Database
-- API
-- MQTT
-- Role dan Permission
-- Coding Guideline
-
-### 10.5 Simulation Before Hardware
-
-Python Simulator digunakan untuk melakukan pengujian awal sebelum integrasi dengan ESP32 dan hardware sebenarnya.
-
----
-
-## 11. Source of Truth
-
-Dokumen berikut menjadi referensi utama project:
-
-```text
-docs/
-├── SYSTEM_OVERVIEW.md
-├── DATABASE_SCHEMA.md
-├── API_SPECIFICATION.md
-├── MQTT_CONTRACT.md
-├── ROLE_PERMISSION.md
-└── CODING_GUIDELINE.md
-```
-
-Setiap perubahan besar pada sistem harus diperbarui pada dokumentasi yang relevan.
-
-Tujuannya agar seluruh anggota tim memiliki pemahaman arsitektur yang sama dan implementasi antar-komponen tetap konsisten.
+Diagram ini konseptual; penamaan tabel, class, dan topic MQTT harus mengikuti implementasi yang sudah ada setelah diperiksa.
+
+## 5. Komponen dan tanggung jawab
+
+| Komponen | Tanggung jawab |
+|---|---|
+| Laravel API | Validasi request, authorization, pengelolaan data, konsistensi stok, dan orkestrasi dispensing. |
+| Database | Sumber kebenaran untuk katalog, stok operasional, status order, dan catatan aktivitas. |
+| MQTT broker | Mengirimkan command dan menerima telemetry/event; bukan database bisnis. |
+| Simulator Python | Mensimulasikan perilaku mesin dan melaporkan status yang terjadi. Tidak menjadi sumber stok utama. |
+| Dashboard admin | Mengelola/memantau sesuai role. |
+| Frontend kiosk | Menampilkan katalog dan meminta proses sesuai API yang disepakati. |
+| Sistem pembayaran eksternal | Memproses pembayaran dan menyediakan konfirmasi yang dapat diverifikasi backend. |
+
+## 6. Alur order dan stok
+
+1. Kiosk mengirim atau menyelesaikan order melalui API yang ditetapkan bersama tim terkait.
+2. Backend memverifikasi bahwa order valid dan status pembayaran sudah dikonfirmasi melalui sumber tepercaya.
+3. Backend memeriksa stok di database dan mengunci data yang relevan bila diperlukan untuk menghindari race condition.
+4. Dalam transaksi database, backend menandai pemrosesan pembayaran/order dan mengurangi atau mereservasi stok **tepat satu kali** sesuai kebijakan inventory yang dipakai.
+5. Backend membuat command dispensing dengan ID/korelasi unik, lalu menerbitkan command melalui MQTT atau mekanisme yang sudah ada.
+6. Simulator/perangkat menjalankan alur `IDLE → VALIDATING → DISPENSING → DONE → IDLE` atau melaporkan `FAILED` jika proses gagal.
+7. Backend menyimpan status/event dan dashboard menampilkan status terbaru.
+8. Jika hasil dispensing tidak diketahui atau gagal, sistem melakukan rekonsiliasi. Stok tidak boleh otomatis dikembalikan sebelum dipastikan produk tidak keluar.
+
+**Catatan desain:** pengguna telah menetapkan bahwa stok berkurang setelah pembayaran berhasil. Implementasi harus mencegah pengurangan ganda ketika callback, HTTP request, atau pesan MQTT dikirim ulang. Jika tim memilih model reservasi sebelum dispensing, dokumentasikan kapan reservasi menjadi pengurangan final.
+
+## 7. State machine
+
+State minimum yang disepakati:
+
+- `IDLE`: tidak ada proses dispensing aktif.
+- `VALIDATING`: memeriksa command, slot, dan prasyarat.
+- `DISPENSING`: proses pengeluaran produk berjalan.
+- `DONE`: proses selesai dan hasil dicatat.
+- `FAILED`/`ERROR`: proses gagal atau membutuhkan pemeriksaan.
+
+Suhu dipantau secara kontinu sebagai telemetry/condition, bukan melalui state pemanasan pada setiap transaksi. Batas suhu aman harus berasal dari konfigurasi yang disepakati; jangan mengarang angka ambang.
+
+## 8. Prinsip inventory
+
+- Stok database adalah rujukan untuk API, dashboard, dan simulator.
+- Tentukan satu sumber stok operasional yang otoritatif. Jika stok per slot mesin, stok slot adalah nilai utama; total stok produk lintas mesin sebaiknya dihitung dari slot, bukan dipelihara sebagai angka duplikat yang dapat berbeda.
+- Simulator boleh memiliki cache untuk simulasi, tetapi harus dapat disinkronkan dengan backend dan tidak dapat mengubah stok bisnis secara mandiri.
+- UI tidak boleh menganggap data cache sebagai stok terbaru bila endpoint sinkronisasi tersedia.
+
+## 9. Keamanan dan keandalan
+
+- Semua endpoint yang mengubah data harus memiliki validasi dan authorization.
+- Konfirmasi pembayaran tidak boleh dipercaya hanya karena dikirim dari browser/kiosk. Gunakan callback server-to-server, verifikasi status ke sistem pembayaran, atau mekanisme tepercaya yang disepakati.
+- Lindungi API dan broker MQTT dengan kredensial/ACL sesuai kemampuan lingkungan.
+- Gunakan idempotency key/unique business key untuk mencegah duplikasi.
+- Catat perubahan stok dan hasil dispensing untuk audit/reconciliation.
+- Jangan mengekspos credential, stack trace, atau informasi sensitif dalam response/log publik.
+
+## 10. Hal yang harus diverifikasi di repository
+
+- Sumber stok aktual: tabel/kolom yang sekarang digunakan.
+- Nama dan struktur model `Machine`, slot, produk, dan order.
+- Route aktual untuk `/dispense` dan `/machine-status` setelah prefix `/api`.
+- Format payload MQTT, topic, dan status yang digunakan simulator.
+- Mekanisme konfirmasi pembayaran yang sudah disepakati antar kelompok.
+- Test yang tersedia dan migrasi yang sudah diterapkan.

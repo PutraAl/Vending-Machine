@@ -29,11 +29,11 @@ def main():
     )
 
     # Initial inventory telemetry
-    publisher.publish_inventory(
-        slot="A01",
-        product="Nasi Goreng",
-        current_qty=5
-    )
+    # publisher.publish_inventory(
+    #     slot="A01",
+    #     product="Nasi Goreng",
+    #     current_qty=5
+    # )
 
     print("\n[SIMULATOR] Running...")
     print("[SIMULATOR] Waiting for commands...")
