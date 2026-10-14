@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\ProductController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\PaymentController;
+use App\Http\Controllers\Api\DispenseReconciliationController;
 
 Route::prefix('v1')->group(function (): void {
 
@@ -84,7 +85,10 @@ Route::prefix('v1')->group(function (): void {
     */
 
     Route::middleware('auth:sanctum')->group(function (): void {
-
+        Route::post(
+            '/dispenses/{dispense}/reconcile',
+            [DispenseReconciliationController::class, 'store']
+        )->middleware('role:admin');
         // Categories
         Route::get('/categories', [
             ProductCategoryController::class,
@@ -204,17 +208,14 @@ Route::prefix('v1')->group(function (): void {
         ])->middleware('role:admin,technician,operator');
 
         // Dispense result
-        Route::post('/dispenses/{dispense}/complete', [
-            DispenseController::class,
-            'complete',
-        ])->middleware('role:admin,operator');
+        // Route::post('/dispenses/{dispense}/complete', [
+        //     DispenseController::class,
+        //     'complete',
+        // ])->middleware('role:admin,operator');
 
-        Route::post('/dispenses/{dispense}/fail', [
-            DispenseController::class,
-            'fail',
-        ])->middleware('role:admin,operator');
+        // Route::post('/dispenses/{dispense}/fail', [
+        //     DispenseController::class,
+        //     'fail',
+        // ])->middleware('role:admin,operator');
     });
-
-  
-  
 });

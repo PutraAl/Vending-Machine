@@ -18,7 +18,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/machines', [
+            ->postJson('/api/v1/machines', [
                 'machine_code' => 'VM001',
                 'name' => 'Vending Machine Lobby',
                 'location' => 'Gedung A - Lantai 1',
@@ -46,7 +46,7 @@ class MachineApiTest extends TestCase
             ]);
 
             $response = $this->actingAs($user)
-                ->postJson('/api/machines', [
+                ->postJson('/api/v1/machines', [
                     'machine_code' => 'VM001',
                     'name' => 'Vending Machine',
                     'temperature_threshold' => 80,
@@ -72,7 +72,7 @@ class MachineApiTest extends TestCase
             ]);
 
             $response = $this->actingAs($user)
-                ->getJson('/api/machines');
+                ->getJson('/api/v1/machines');
 
             $response
                 ->assertOk()
@@ -101,7 +101,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->getJson('/api/machines?status=ONLINE');
+            ->getJson('/api/v1/machines?status=ONLINE');
 
         $response
             ->assertOk()
@@ -126,7 +126,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/machines', [
+            ->postJson('/api/v1/machines', [
                 'machine_code' => 'VM001',
                 'name' => 'Another Machine',
                 'temperature_threshold' => 80,
@@ -142,7 +142,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/machines', [
+            ->postJson('/api/v1/machines', [
                 'machine_code' => 'VM001',
                 'name' => 'Vending Machine',
                 'temperature_threshold' => -1,
@@ -165,7 +165,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->putJson("/api/machines/{$machine->id}", [
+            ->putJson("/api/v1/machines/{$machine->id}", [
                 'machine_code' => 'VM001',
                 'name' => 'New Name',
                 'status' => 'ONLINE',
@@ -198,7 +198,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->putJson("/api/machines/{$machine->id}", [
+            ->putJson("/api/v1/machines/{$machine->id}", [
                 'machine_code' => 'VM001',
                 'name' => 'New Name',
                 'temperature_threshold' => 85,
@@ -221,7 +221,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->deleteJson("/api/machines/{$machine->id}");
+            ->deleteJson("/api/v1/machines/{$machine->id}");
 
         $response
             ->assertOk()
@@ -264,7 +264,7 @@ class MachineApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->deleteJson("/api/machines/{$machine->id}");
+            ->deleteJson("/api/v1/machines/{$machine->id}");
 
         $response
             ->assertStatus(409)

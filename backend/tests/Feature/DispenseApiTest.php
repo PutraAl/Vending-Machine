@@ -5,10 +5,14 @@ namespace Tests\Feature;
 use App\Models\Machine;
 use App\Models\MachineSlot;
 use App\Models\Order;
+use App\Models\Payment;
 use App\Models\Product;
 use App\Models\ProductCategory;
-use App\Models\User;
+use App\Models\Telemetry;
+use App\Services\MqttService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Mockery\MockInterface;
 use Tests\TestCase;
 
 class DispenseApiTest extends TestCase
@@ -40,6 +44,19 @@ class DispenseApiTest extends TestCase
         ]);
     }
 
+    private function createSlot(
+        Machine $machine,
+        Product $product
+    ): MachineSlot {
+        return $machine->slots()->create([
+            'product_id' => $product->id,
+            'slot_code' => 'A01',
+            'current_qty' => 5,
+            'hold_qty' => 1,
+            'capacity' => 10,
+        ]);
+    }
+
     private function createReadyOrder(
         Machine $machine,
         Product $product,
@@ -63,21 +80,53 @@ class DispenseApiTest extends TestCase
         return $order;
     }
 
-    public function test_operator_can_start_dispense(): void
+    private function createPayment(Order $order): Payment
     {
-        $user = User::factory()->create([
-            'role' => 'operator',
+        return Payment::create([
+            'order_id' => $order->id,
+            'idempotency_key' => 'PAY-' . fake()->unique()->uuid(),
         ]);
+    }
 
+    private function createTemperatureTelemetry(
+        Machine $machine,
+        float $temperature,
+        ?Carbon $createdAt = null
+    ): Telemetry {
+        return Telemetry::create([
+            'machine_id' => $machine->id,
+            'temperature' => $temperature,
+            'state' => 'IDLE',
+            'door_status' => null,
+            'created_at' => $createdAt ?? now(),
+        ]);
+    }
+
+    private function mockDispenseCommand(): void
+    {
+        $this->mock(
+            MqttService::class,
+            function (MockInterface $mock): void {
+                $mock->shouldReceive('publishDispenseCommand')
+                    ->once()
+                    ->withArgs(
+                        fn (
+                            int $dispenseId,
+                            string $slot,
+                            int $quantity
+                        ) => $dispenseId > 0
+                            && $slot === 'A01'
+                            && $quantity === 1
+                    );
+            }
+        );
+    }
+
+    public function test_dispense_starts_with_safe_temperature(): void
+    {
         $machine = $this->createMachine();
         $product = $this->createProduct();
-
-        $slot = $machine->slots()->create([
-            'product_id' => $product->id,
-            'slot_code' => 'A01',
-            'stock' => 5,
-            'capacity' => 10,
-        ]);
+        $slot = $this->createSlot($machine, $product);
 
         $order = $this->createReadyOrder(
             $machine,
@@ -85,17 +134,19 @@ class DispenseApiTest extends TestCase
             $slot
         );
 
-        $response = $this->actingAs($user)
-            ->postJson(
-                "/api/orders/{$order->id}/dispense"
-            );
+        $payment = $this->createPayment($order);
+
+        $this->createTemperatureTelemetry($machine, 72.5);
+        $this->mockDispenseCommand();
+
+        $response = $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        );
 
         $response
             ->assertCreated()
-            ->assertJsonPath(
-                'data.status',
-                'PENDING'
-            );
+            ->assertJsonPath('data.order.status', 'DISPENSING')
+            ->assertJsonPath('data.dispense.status', 'DISPENSING');
 
         $this->assertDatabaseHas('orders', [
             'id' => $order->id,
@@ -104,71 +155,22 @@ class DispenseApiTest extends TestCase
 
         $this->assertDatabaseHas('dispenses', [
             'order_id' => $order->id,
-            'machine_id' => $machine->id,
-            'slot_id' => $slot->id,
-            'status' => 'PENDING',
+            'status' => 'DISPENSING',
         ]);
 
+        // Stock is still reserved, not consumed, until completion.
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 5,
+            'current_qty' => 5,
+            'hold_qty' => 1,
         ]);
     }
 
-    public function test_dispense_cannot_start_from_pending_order(): void
+    public function test_dispense_is_rejected_when_temperature_exceeds_threshold(): void
     {
-        $user = User::factory()->create([
-            'role' => 'operator',
-        ]);
-
         $machine = $this->createMachine();
         $product = $this->createProduct();
-
-        $slot = $machine->slots()->create([
-            'product_id' => $product->id,
-            'slot_code' => 'A01',
-            'stock' => 5,
-            'capacity' => 10,
-        ]);
-
-        $order = Order::create([
-            'order_code' => 'ORD-' . fake()->unique()->numerify('######'),
-            'machine_id' => $machine->id,
-            'status' => 'PENDING',
-            'total_amount' => 15000,
-        ]);
-
-        $order->items()->create([
-            'product_id' => $product->id,
-            'slot_id' => $slot->id,
-            'quantity' => 1,
-            'price' => 15000,
-            'subtotal' => 15000,
-        ]);
-
-        $response = $this->actingAs($user)
-            ->postJson(
-                "/api/orders/{$order->id}/dispense"
-            );
-
-        $response->assertUnprocessable();
-    }
-
-    public function test_dispense_cannot_start_twice(): void
-    {
-        $user = User::factory()->create([
-            'role' => 'operator',
-        ]);
-
-        $machine = $this->createMachine();
-        $product = $this->createProduct();
-
-        $slot = $machine->slots()->create([
-            'product_id' => $product->id,
-            'slot_code' => 'A01',
-            'stock' => 5,
-            'capacity' => 10,
-        ]);
+        $slot = $this->createSlot($machine, $product);
 
         $order = $this->createReadyOrder(
             $machine,
@@ -176,19 +178,152 @@ class DispenseApiTest extends TestCase
             $slot
         );
 
-        $this->actingAs($user)
-            ->postJson(
-                "/api/orders/{$order->id}/dispense"
-            )
-            ->assertCreated();
+        $payment = $this->createPayment($order);
 
-        $response = $this->actingAs($user)
-            ->postJson(
-                "/api/orders/{$order->id}/dispense"
-            );
+        $this->createTemperatureTelemetry($machine, 85.0);
 
-        $response->assertUnprocessable();
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertUnprocessable();
+
+        $this->assertDatabaseMissing('dispenses', [
+            'order_id' => $order->id,
+        ]);
+
+        $this->assertDatabaseHas('orders', [
+            'id' => $order->id,
+            'status' => 'READY_TO_DISPENSE',
+        ]);
+
+        $this->assertDatabaseHas('machine_slots', [
+            'id' => $slot->id,
+            'current_qty' => 5,
+            'hold_qty' => 1,
+        ]);
+    }
+
+    public function test_dispense_is_rejected_when_temperature_telemetry_is_missing(): void
+    {
+        $machine = $this->createMachine();
+        $product = $this->createProduct();
+        $slot = $this->createSlot($machine, $product);
+
+        $order = $this->createReadyOrder(
+            $machine,
+            $product,
+            $slot
+        );
+
+        $payment = $this->createPayment($order);
+
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertUnprocessable();
+
+        $this->assertDatabaseMissing('dispenses', [
+            'order_id' => $order->id,
+        ]);
+
+        $this->assertDatabaseHas('machine_slots', [
+            'id' => $slot->id,
+            'current_qty' => 5,
+            'hold_qty' => 1,
+        ]);
+    }
+
+    public function test_dispense_is_rejected_when_temperature_telemetry_is_stale(): void
+    {
+        $machine = $this->createMachine();
+        $product = $this->createProduct();
+        $slot = $this->createSlot($machine, $product);
+
+        $order = $this->createReadyOrder(
+            $machine,
+            $product,
+            $slot
+        );
+
+        $payment = $this->createPayment($order);
+
+        $this->createTemperatureTelemetry(
+            $machine,
+            72.5,
+            now()->subSeconds(20)
+        );
+
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertUnprocessable();
+
+        $this->assertDatabaseMissing('dispenses', [
+            'order_id' => $order->id,
+        ]);
+
+        $this->assertDatabaseHas('machine_slots', [
+            'id' => $slot->id,
+            'current_qty' => 5,
+            'hold_qty' => 1,
+        ]);
+    }
+
+    public function test_dispense_cannot_start_from_pending_order(): void
+    {
+        $machine = $this->createMachine();
+        $product = $this->createProduct();
+        $slot = $this->createSlot($machine, $product);
+
+        $order = $this->createReadyOrder(
+            $machine,
+            $product,
+            $slot
+        );
+
+        $order->update([
+            'status' => 'PENDING',
+        ]);
+
+        $payment = $this->createPayment($order);
+
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertUnprocessable();
+
+        $this->assertDatabaseMissing('dispenses', [
+            'order_id' => $order->id,
+        ]);
+    }
+
+    public function test_dispense_cannot_start_twice(): void
+    {
+        $machine = $this->createMachine();
+        $product = $this->createProduct();
+        $slot = $this->createSlot($machine, $product);
+
+        $order = $this->createReadyOrder(
+            $machine,
+            $product,
+            $slot
+        );
+
+        $payment = $this->createPayment($order);
+
+        $this->createTemperatureTelemetry($machine, 72.5);
+        $this->mockDispenseCommand();
+
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertCreated();
+
+        $this->postJson(
+            "/api/v1/payments/{$payment->id}/confirm-dispense"
+        )->assertUnprocessable();
 
         $this->assertDatabaseCount('dispenses', 1);
+
+        $this->assertDatabaseHas('machine_slots', [
+            'id' => $slot->id,
+            'current_qty' => 5,
+            'hold_qty' => 1,
+        ]);
     }
 }

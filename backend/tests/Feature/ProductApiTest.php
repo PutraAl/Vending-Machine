@@ -23,7 +23,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/products', [
+            ->postJson('/api/v1/products', [
                 'category_id' => $category->id,
                 'name' => 'Nasi Goreng',
                 'description' => 'Nasi goreng panas',
@@ -56,7 +56,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/products', [
+            ->postJson('/api/v1/products', [
                 'category_id' => $category->id,
                 'name' => 'Mie Goreng',
                 'price' => 13000,
@@ -76,7 +76,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/products', [
+            ->postJson('/api/v1/products', [
                 'category_id' => $category->id,
                 'name' => 'Mie Goreng',
                 'price' => 13000,
@@ -104,7 +104,7 @@ class ProductApiTest extends TestCase
             ]);
 
             $response = $this->actingAs($user)
-                ->getJson('/api/products');
+                ->getJson('/api/v1/products');
 
             $response
                 ->assertOk()
@@ -119,7 +119,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/products', [
+            ->postJson('/api/v1/products', [
                 'category_id' => 999999,
                 'name' => 'Nasi Goreng',
                 'price' => 15000,
@@ -139,7 +139,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/products', [
+            ->postJson('/api/v1/products', [
                 'category_id' => $category->id,
                 'name' => 'Nasi Goreng',
                 'price' => -1000,
@@ -166,7 +166,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->putJson("/api/products/{$product->id}", [
+            ->putJson("/api/v1/products/{$product->id}", [
                 'category_id' => $category->id,
                 'name' => 'Nasi Goreng Spesial',
                 'price' => 18000,
@@ -199,7 +199,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->putJson("/api/products/{$product->id}", [
+            ->putJson("/api/v1/products/{$product->id}", [
                 'category_id' => $category->id,
                 'name' => 'Nasi Goreng Baru',
                 'price' => 16000,
@@ -226,7 +226,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->deleteJson("/api/products/{$product->id}");
+            ->deleteJson("/api/v1/products/{$product->id}");
 
         $response
             ->assertOk()
@@ -270,7 +270,7 @@ class ProductApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->deleteJson("/api/products/{$product->id}");
+            ->deleteJson("/api/v1/products/{$product->id}");
 
         $response
             ->assertStatus(409)

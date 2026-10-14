@@ -327,6 +327,31 @@ class MqttListenCommand extends Command
 
             return;
         }
+        
+        $errorCode = $payload['error'] ?? null;
+
+        if ($errorCode === 'DISPENSE_OUTCOME_UNKNOWN') {
+            $this->warn(
+                "[MQTT] Dispense {$dispenseId} outcome is unknown. "
+                    . "Reservation retained for reconciliation."
+            );
+
+            return;
+        }
+
+        if ($errorCode !== 'DISPENSE_FAILED') {
+            $this->warn(
+                "[MQTT] Error code is not a confirmed dispense failure. "
+                    . "Reservation retained for reconciliation."
+            );
+
+            return;
+        }
+
+        $this->failDispense(
+            (int) $dispenseId,
+            $machineId
+        );
 
         $this->failDispense(
             (int) $dispenseId,
@@ -411,6 +436,16 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+        $temperature = $payload['temperature'] ?? null;
+
+        if (! $machineId || ! is_numeric($temperature)) {
+            $this->warn(
+                '[MQTT] Temperature message is invalid.'
+            );
+
+            return;
+        }
+
         if (! $machineId) {
             $this->warn(
                 '[MQTT] Error message has missing or invalid machine_id.'

@@ -21,7 +21,7 @@ class AuthenticationTest extends TestCase
             'role' => 'admin',
         ]);
 
-        $response = $this->postJson('/api/auth/login', [
+        $response = $this->postJson('/api/v1/auth/login', [
             'email' => 'admin@example.com',
             'password' => 'password',
         ]);
@@ -43,7 +43,7 @@ class AuthenticationTest extends TestCase
             'password' => 'password',
         ]);
 
-        $this->postJson('/api/auth/login', [
+        $this->postJson('/api/v1/auth/login', [
             'email' => 'admin@example.com',
             'password' => 'wrong-password',
         ])->assertUnauthorized()
@@ -52,7 +52,7 @@ class AuthenticationTest extends TestCase
 
     public function test_login_validates_required_and_valid_input(): void
     {
-        $this->postJson('/api/auth/login', [
+        $this->postJson('/api/v1/auth/login', [
             'email' => 'not-an-email',
         ])->assertStatus(422)
             ->assertJsonPath('success', false)
@@ -64,7 +64,7 @@ class AuthenticationTest extends TestCase
         $user = User::factory()->create(['role' => 'technician']);
 
         $this->actingAs($user, 'sanctum')
-            ->getJson('/api/auth/me')
+            ->getJson('/api/v1/auth/me')
             ->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('data.user.id', $user->id)
@@ -73,7 +73,7 @@ class AuthenticationTest extends TestCase
 
     public function test_me_requires_authentication(): void
     {
-        $this->getJson('/api/auth/me')
+        $this->getJson('/api/v1/auth/me')
             ->assertUnauthorized()
             ->assertJsonPath('message', 'Unauthenticated.');
     }
@@ -84,7 +84,7 @@ class AuthenticationTest extends TestCase
         $token = $user->createToken('logout-test')->plainTextToken;
 
         $this->withToken($token)
-            ->postJson('/api/auth/logout')
+            ->postJson('/api/v1/auth/logout')
             ->assertOk()
             ->assertJson(['success' => true, 'message' => 'Logout successful']);
 
@@ -97,7 +97,7 @@ class AuthenticationTest extends TestCase
         $currentToken = $user->createToken('current')->plainTextToken;
         $otherToken = $user->createToken('other')->plainTextToken;
 
-        $this->withToken($currentToken)->postJson('/api/auth/logout')->assertOk();
+        $this->withToken($currentToken)->postJson('/api/v1/auth/logout')->assertOk();
 
         $this->assertDatabaseCount('personal_access_tokens', 1);
 

@@ -18,7 +18,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/categories', [
+            ->postJson('/api/v1/categories', [
                 'name' => 'Makanan',
                 'description' => 'Makanan panas',
             ]);
@@ -39,7 +39,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/categories', [
+            ->postJson('/api/v1/categories', [
                 'name' => 'Snack',
             ]);
 
@@ -55,7 +55,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/categories', [
+            ->postJson('/api/v1/categories', [
                 'name' => 'Snack',
             ]);
 
@@ -74,7 +74,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->getJson('/api/categories');
+            ->getJson('/api/v1/categories');
 
         $response
             ->assertOk()
@@ -93,7 +93,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->postJson('/api/categories', [
+            ->postJson('/api/v1/categories', [
                 'name' => 'Makanan',
             ]);
 
@@ -117,7 +117,7 @@ class ProductCategoryApiTest extends TestCase
         ]);
 
         $response = $this->actingAs($user)
-            ->deleteJson("/api/categories/{$category->id}");
+            ->deleteJson("/api/v1/categories/{$category->id}");
 
         $response
             ->assertStatus(409)

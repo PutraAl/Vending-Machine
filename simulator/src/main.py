@@ -1,5 +1,5 @@
 import time
-
+import os
 from mqtt.client import MQTTClient
 from mqtt.publisher import MQTTPublisher
 from mqtt.subscriber import MQTTSubscriber
@@ -24,8 +24,17 @@ def main():
     )
 
     # Initial temperature telemetry
+    temperature = float(
+        os.getenv("SIMULATOR_TEMPERATURE_C", "72.5")
+    )
+
+    telemetry_interval = max(
+        1.0,
+        float(os.getenv("TEMPERATURE_TELEMETRY_INTERVAL", "5"))
+    )
+
     publisher.publish_temperature(
-        temperature=72.5
+        temperature=temperature
     )
 
     # Initial inventory telemetry
@@ -40,8 +49,12 @@ def main():
     print("[SIMULATOR] Press CTRL+C to stop.")
 
     try:
-        while True:
-            time.sleep(1)
+         while True:
+            time.sleep(telemetry_interval)
+
+            publisher.publish_temperature(
+                temperature=temperature
+            )
 
     except KeyboardInterrupt:
         print("\n[SIMULATOR] Stopping...")

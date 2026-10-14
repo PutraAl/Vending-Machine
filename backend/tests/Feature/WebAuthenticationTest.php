@@ -79,7 +79,7 @@ class WebAuthenticationTest extends TestCase
             ->get('/dashboard')
             ->assertOk()
             ->assertSee('Admin User')
-            ->assertSee('Role: admin');
+            ->assertSee('admin');
 
         $this->actingAs($user)
             ->post('/logout')

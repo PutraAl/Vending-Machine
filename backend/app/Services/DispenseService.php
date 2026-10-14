@@ -29,17 +29,49 @@ class DispenseService
                     ],
                 ]);
             }
+          
 
-            $lockedOrder->load([
-                'machine',
-                'items.product',
-                'items.slot',
-            ]);
+            // Get the latest temperature telemetry for this machine.
+            $temperatureTelemetry = $lockedOrder->machine
+                ->telemetries()
+                ->whereNotNull('temperature')
+                ->latest('created_at')
+                ->first();
 
-            if ($lockedOrder->machine->status !== 'ONLINE') {
+            if (
+                ! $temperatureTelemetry
+                || ! $temperatureTelemetry->created_at
+            ) {
                 throw ValidationException::withMessages([
-                    'order' => [
-                        'Machine is currently offline.',
+                    'temperature' => [
+                        'Cannot dispense because temperature telemetry is unavailable.',
+                    ],
+                ]);
+            }
+
+            // Reject telemetry older than 15 seconds.
+            if (
+                $temperatureTelemetry->created_at
+                ->lt(now()->subSeconds(15))
+            ) {
+                throw ValidationException::withMessages([
+                    'temperature' => [
+                        'Cannot dispense because temperature telemetry is stale.',
+                    ],
+                ]);
+            }
+
+            $temperature = (float) $temperatureTelemetry->temperature;
+            $threshold = (float) $lockedOrder->machine->temperature_threshold;
+
+            // The configured threshold is the maximum permitted temperature.
+            if (
+                ! is_finite($temperature)
+                || $temperature > $threshold
+            ) {
+                throw ValidationException::withMessages([
+                    'temperature' => [
+                        'Machine temperature exceeds the allowed threshold.',
                     ],
                 ]);
             }

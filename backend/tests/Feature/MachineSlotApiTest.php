@@ -48,7 +48,7 @@ class MachineSlotApiTest extends TestCase
         $machine->slots()->create([
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -59,7 +59,7 @@ class MachineSlotApiTest extends TestCase
 
             $response = $this->actingAs($user)
                 ->getJson(
-                    "/api/machines/{$machine->id}/slots"
+                    "/api/v1/machines/{$machine->id}/slots"
                 );
 
             $response
@@ -80,11 +80,11 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->postJson(
-                "/api/machines/{$machine->id}/slots",
+                "/api/v1/machines/{$machine->id}/slots",
                 [
                     'product_id' => $product->id,
                     'slot_code' => 'A01',
-                    'stock' => 5,
+                    'current_qty' => 5,
                     'capacity' => 10,
                 ]
             );
@@ -97,7 +97,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
     }
@@ -113,11 +113,11 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->postJson(
-                "/api/machines/{$machine->id}/slots",
+                "/api/v1/machines/{$machine->id}/slots",
                 [
                     'product_id' => $product->id,
                     'slot_code' => 'A01',
-                    'stock' => 5,
+                    'current_qty' => 5,
                     'capacity' => 10,
                 ]
             );
@@ -136,11 +136,11 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->postJson(
-                "/api/machines/{$machine->id}/slots",
+                "/api/v1/machines/{$machine->id}/slots",
                 [
                     'product_id' => $product->id,
                     'slot_code' => 'A01',
-                    'stock' => 5,
+                    'current_qty' => 5,
                     'capacity' => 10,
                 ]
             );
@@ -159,18 +159,18 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->postJson(
-                "/api/machines/{$machine->id}/slots",
+                "/api/v1/machines/{$machine->id}/slots",
                 [
                     'product_id' => $product->id,
                     'slot_code' => 'A01',
-                    'stock' => 11,
+                    'current_qty' => 11,
                     'capacity' => 10,
                 ]
             );
 
         $response
             ->assertUnprocessable()
-            ->assertJsonValidationErrors('stock');
+            ->assertJsonValidationErrors('current_qty');
     }
 
     public function test_slot_code_must_be_unique_per_machine(): void
@@ -183,7 +183,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -193,11 +193,11 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->postJson(
-                "/api/machines/{$machine->id}/slots",
+                "/api/v1/machines/{$machine->id}/slots",
                 [
                     'product_id' => $anotherProduct->id,
                     'slot_code' => 'A01',
-                    'stock' => 5,
+                    'current_qty' => 5,
                     'capacity' => 10,
                 ]
             );
@@ -214,7 +214,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -224,19 +224,19 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->patchJson(
-                "/api/machines/{$machine->id}/slots/{$slot->id}/stock",
+                "/api/v1/machines/{$machine->id}/slots/{$slot->id}/stock",
                 [
-                    'stock' => 8,
+                    'current_qty' => 8,
                 ]
             );
 
         $response
             ->assertOk()
-            ->assertJsonPath('data.stock', 8);
+            ->assertJsonPath('data.current_qty', 8);
 
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 8,
+            'current_qty' => 8,
         ]);
     }
 
@@ -249,7 +249,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -259,19 +259,19 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->patchJson(
-                "/api/machines/{$machine->id}/slots/{$slot->id}/stock",
+                "/api/v1/machines/{$machine->id}/slots/{$slot->id}/stock",
                 [
-                    'stock' => 11,
+                    'current_qty' => 11,
                 ]
             );
 
         $response
             ->assertUnprocessable()
-            ->assertJsonPath('success', false);
+            ->assertJsonValidationErrors('current_qty');
 
         $this->assertDatabaseHas('machine_slots', [
             'id' => $slot->id,
-            'stock' => 5,
+            'current_qty' => 5,
         ]);
     }
 
@@ -284,7 +284,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machine->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -294,9 +294,9 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->patchJson(
-                "/api/machines/{$machine->id}/slots/{$slot->id}/stock",
+                "/api/v1/machines/{$machine->id}/slots/{$slot->id}/stock",
                 [
-                    'stock' => 8,
+                    'current_qty' => 8,
                 ]
             );
 
@@ -314,7 +314,7 @@ class MachineSlotApiTest extends TestCase
             'machine_id' => $machineB->id,
             'product_id' => $product->id,
             'slot_code' => 'A01',
-            'stock' => 5,
+            'current_qty' => 5,
             'capacity' => 10,
         ]);
 
@@ -324,7 +324,7 @@ class MachineSlotApiTest extends TestCase
 
         $response = $this->actingAs($user)
             ->getJson(
-                "/api/machines/{$machineA->id}/slots/{$slot->id}"
+                "/api/v1/machines/{$machineA->id}/slots/{$slot->id}"
             );
 
         $response->assertNotFound();
