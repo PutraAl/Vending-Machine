@@ -18,7 +18,7 @@ class DashboardController extends Controller
 
         $ordersToday = Order::whereDate('created_at', today())->count();
 
-        $activeDispensing = Dispense::where('status', 'PENDING')->count();
+        $activeDispensing = Dispense::where('status', 'DISPENSING')->count();
 
         $machines = Machine::with('latestTelemetry')
             ->orderBy('machine_code')
