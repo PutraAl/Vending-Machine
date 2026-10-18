@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use App\Models\Dispense;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -60,9 +61,19 @@ class Machine extends Model
             'machine_id'
         );
     }
-
     public function latestTelemetry(): HasOne
     {
-        return $this->hasOne(Telemetry::class)->latestOfMany('created_at');
+        return $this->hasOne(Telemetry::class)
+            ->latestOfMany('created_at');
+    }
+    public function latestTemperatureTelemetry(): HasOne
+    {
+        return $this->hasOne(Telemetry::class)->ofMany(
+            [
+                'created_at' => 'max',
+                'id' => 'max',
+            ],
+            fn(Builder $query) => $query->whereNotNull('temperature')
+        );
     }
 }

@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\DB;
 use PhpMqtt\Client\ConnectionSettings;
 use PhpMqtt\Client\MqttClient;
 use Throwable;
+use App\Models\Machine;
+use App\Models\MachineError;
 
 class MqttListenCommand extends Command
 {
@@ -282,82 +284,180 @@ class MqttListenCommand extends Command
         }
     }
 
-    private function handleErrorMessage(
-        string $topic,
-        string $message
-    ): void {
-        $this->line(
-            "[MQTT] ERROR {$topic} → {$message}"
+    
+private function handleErrorMessage(
+    string $topic,
+    string $message
+): void {
+    $this->line("[MQTT] ERROR {$topic} -> {$message}");
+
+    $payload = $this->decodePayload($message);
+
+    if ($payload === null) {
+        return;
+    }
+
+    $machineId = $this->getMachineId($payload);
+
+    if (! $machineId) {
+        $this->warn('[MQTT] Invalid machine_id.');
+        return;
+    }
+
+    if (! Machine::whereKey($machineId)->exists()) {
+        $this->warn("[MQTT] Machine {$machineId} was not found.");
+        return;
+    }
+
+    $rawErrorCode = $payload['error']
+        ?? $payload['error_code']
+        ?? null;
+
+    $errorCode = is_string($rawErrorCode)
+        && trim($rawErrorCode) !== ''
+            ? strtoupper(trim($rawErrorCode))
+            : 'UNKNOWN_ERROR';
+
+    $errorCode = substr($errorCode, 0, 100);
+
+    $dispenseId = $payload['dispense_id'] ?? null;
+    $slot = $payload['slot'] ?? null;
+
+    $messages = [
+        'TEMP_HIGH' =>
+            'Suhu mesin melewati batas yang ditentukan.',
+        'DISPENSE_FAILED' =>
+            'Produk gagal dikeluarkan oleh mesin.',
+        'DISPENSE_OUTCOME_UNKNOWN' =>
+            'Hasil dispense belum dapat dipastikan. Perlu rekonsiliasi.',
+        'INVALID_COMMAND_JSON' =>
+            'Mesin menerima pesan JSON yang tidak valid.',
+        'INVALID_DISPENSE_COMMAND' =>
+            'Mesin menerima perintah dispense yang tidak valid.',
+    ];
+
+    $providedMessage = $payload['message'] ?? null;
+
+    $errorMessage = is_string($providedMessage)
+        && trim($providedMessage) !== ''
+            ? trim($providedMessage)
+            : ($messages[$errorCode]
+                ?? "Mesin melaporkan error: {$errorCode}.");
+
+    if (is_string($slot) && trim($slot) !== '') {
+        $errorMessage .= ' Slot: ' . trim($slot) . '.';
+    }
+
+    if (is_numeric($dispenseId) && (int) $dispenseId > 0) {
+        $errorMessage .= ' Dispense ID: ' . (int) $dispenseId . '.';
+    }
+
+    $severity = match ($errorCode) {
+        'TEMP_HIGH',
+        'TEMPERATURE_HIGH',
+        'OVER_TEMPERATURE' => 'CRITICAL',
+
+        'DISPENSE_FAILED' => 'HIGH',
+
+        'DISPENSE_OUTCOME_UNKNOWN' => 'WARNING',
+
+        'INVALID_COMMAND_JSON',
+        'INVALID_DISPENSE_COMMAND' => 'MEDIUM',
+
+        default => 'WARNING',
+    };
+
+    /*
+     * Hindari membuat banyak catatan aktif untuk error
+     * yang sama pada mesin yang sama.
+     * Jika sudah selesai lalu muncul lagi, buat catatan baru.
+     */
+    $activeError = MachineError::query()
+        ->where('machine_id', $machineId)
+        ->where('error_code', $errorCode)
+        ->whereNull('resolved_at')
+        ->first();
+
+    if ($activeError) {
+        $activeError->update([
+            'message' => $errorMessage,
+            'severity' => $severity,
+        ]);
+
+        $this->info(
+            "[MQTT] Updated active error {$errorCode} "
+            . "for machine {$machineId}."
         );
+    } else {
+        MachineError::create([
+            'machine_id' => $machineId,
+            'error_code' => $errorCode,
+            'message' => $errorMessage,
+            'severity' => $severity,
+            'created_at' => now(),
+            'resolved_at' => null,
+        ]);
 
-        $payload = $this->decodePayload($message);
-
-        if ($payload === null) {
-            return;
-        }
-
-        $machineId = $this->getMachineId($payload);
-        if (! $machineId) {
-            $this->warn(
-                '[MQTT] Error message has missing or invalid machine_id.'
-            );
-
-            return;
-        }
-
-        if ($machineId) {
-            /*
-             * Store ERROR as telemetry.
-             */
-            Telemetry::create([
-                'machine_id' => $machineId,
-                'temperature' => null,
-                'state' => 'ERROR',
-                'door_status' => null,
-                'created_at' => now(),
-            ]);
-        }
-
-        $dispenseId = $payload['dispense_id'] ?? null;
-
-        if (! $dispenseId) {
-            $this->warn(
-                '[MQTT] Error message has no dispense_id.'
-            );
-
-            return;
-        }
-        
-        $errorCode = $payload['error'] ?? null;
-
-        if ($errorCode === 'DISPENSE_OUTCOME_UNKNOWN') {
-            $this->warn(
-                "[MQTT] Dispense {$dispenseId} outcome is unknown. "
-                    . "Reservation retained for reconciliation."
-            );
-
-            return;
-        }
-
-        if ($errorCode !== 'DISPENSE_FAILED') {
-            $this->warn(
-                "[MQTT] Error code is not a confirmed dispense failure. "
-                    . "Reservation retained for reconciliation."
-            );
-
-            return;
-        }
-
-        $this->failDispense(
-            (int) $dispenseId,
-            $machineId
-        );
-
-        $this->failDispense(
-            (int) $dispenseId,
-            $machineId
+        $this->warn(
+            "[MQTT] Machine error {$errorCode} recorded "
+            . "for machine {$machineId}."
         );
     }
+
+    // Pertahankan riwayat telemetry seperti sebelumnya.
+    Telemetry::create([
+        'machine_id' => $machineId,
+        'temperature' => null,
+        'state' => 'ERROR',
+        'door_status' => null,
+        'created_at' => now(),
+    ]);
+
+    /*
+     * Error umum tetap dicatat meskipun tidak memiliki
+     * dispense_id. Tanpa ID, jangan menyentuh dispense.
+     */
+    if (! is_numeric($dispenseId) || (int) $dispenseId < 1) {
+        if (in_array($errorCode, [
+            'DISPENSE_FAILED',
+            'DISPENSE_OUTCOME_UNKNOWN',
+        ], true)) {
+            $this->warn(
+                "[MQTT] {$errorCode} has no valid dispense_id. "
+                . 'No dispense status or stock was changed.'
+            );
+        }
+
+        return;
+    }
+
+    /*
+     * Hasil tidak diketahui bukan berarti dispense gagal.
+     * Reservasi harus tetap ada untuk rekonsiliasi.
+     */
+    if ($errorCode === 'DISPENSE_OUTCOME_UNKNOWN') {
+        $this->warn(
+            "[MQTT] Dispense {$dispenseId} outcome is unknown. "
+            . 'Reservation retained for reconciliation.'
+        );
+
+        return;
+    }
+
+    /*
+     * Hanya kegagalan dispense yang terkonfirmasi
+     * boleh menjalankan alur failDispense().
+     */
+    if ($errorCode !== 'DISPENSE_FAILED') {
+        return;
+    }
+
+    $this->failDispense(
+        (int) $dispenseId,
+        $machineId
+    );
+}
+
 
     private function handleTemperatureMessage(
         string $topic,

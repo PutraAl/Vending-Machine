@@ -7,9 +7,13 @@ use App\Http\Controllers\Web\CategoryController;
 use App\Http\Controllers\Web\ProductController;
 use App\Http\Controllers\Web\MachineController;
 use App\Http\Controllers\Web\MachineSlotController;
+use App\Http\Controllers\Web\OrderController;
+use App\Http\Controllers\Web\DispensingController;
+use App\Http\Controllers\Web\TelemetryController;
+use App\Http\Controllers\Web\MachineErrorController;
 
 Route::get('/', function () {
-    return view('welcome');
+    return view('auth.login');
 });
 
 Route::middleware('guest')->group(function (): void {
@@ -62,16 +66,42 @@ Route::middleware('auth')->group(function (): void {
         ->name('machines.destroy');
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
-    // SLOT
+    // SLOT & STOCK: pilih mesin
     Route::get('/stock-slots', [MachineSlotController::class, 'index'])
         ->name('stock-slots.index');
 
-    Route::post('/stock-slots', [MachineSlotController::class, 'store'])
-        ->name('stock-slots.store');
+    // SLOT & STOCK: detail mesin terpilih
+    Route::get('/stock-slots/machines/{machine}', [MachineSlotController::class, 'showMachine'])
+        ->name('stock-slots.machine');
 
+    // Tambah slot khusus mesin terpilih
+    Route::post('/stock-slots/machines/{machine}', [MachineSlotController::class, 'storeForMachine'])
+        ->name('stock-slots.machine.store');
+
+    // Edit dan hapus slot yang sudah ada
     Route::put('/stock-slots/{slot}', [MachineSlotController::class, 'update'])
         ->name('stock-slots.update');
 
     Route::delete('/stock-slots/{slot}', [MachineSlotController::class, 'destroy'])
         ->name('stock-slots.destroy');
+
+    // Liat data order
+    Route::get('/orders', [OrderController::class, 'index'])
+        ->name('orders.index');
+
+    // lIat data dispense
+    Route::get('/dispensing', [DispensingController::class, 'index'])
+        ->name('dispensing.index');
+
+    // Liat data telemetry
+    Route::get('/telemetry', [TelemetryController::class, 'index'])
+        ->name('telemetry.index');
+
+    // Liat data error mesin
+    Route::get('/machine-errors', [MachineErrorController::class, 'index'])
+        ->name('machine-errors.index');
+    Route::post(
+        '/machine-errors/{machineError}/resolve',
+        [MachineErrorController::class, 'resolve']
+    )->name('machine-errors.resolve');
 });
