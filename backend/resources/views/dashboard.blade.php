@@ -34,10 +34,9 @@
 
                 <span class="status-pulse h-2 w-2 rounded-full bg-emerald-400"></span>
 
-                <span class="text-xs font-medium text-emerald-300">
-                    System Operational
+                <span class="text-xs font-medium {{ $systemStatusClass }}">
+                    {{ $systemStatus }}
                 </span>
-
             </div>
 
         </div>
@@ -264,13 +263,36 @@
                                 {{-- Status --}}
                                 <div>
                                     @php
-                                        $status = strtoupper($machine->status ?? 'OFFLINE');
+                                        $telemetry = $machine->latestTelemetry;
+                                        $temperatureTelemetry = $machine->latestTemperatureTelemetry;
+
+                                        $telemetryState = strtoupper($telemetry?->state ?? 'UNKNOWN');
+
+                                        $stateIsFresh = $telemetry?->created_at !== null
+                                            && $telemetry->created_at->gte(now()->subSeconds(15));
+
+                                        $temperatureIsFresh = $temperatureTelemetry?->created_at !== null
+                                            && $temperatureTelemetry->created_at->gte(now()->subSeconds(15));
+
+                                        $status = match (true) {
+                                            $telemetryState === 'ERROR' && $stateIsFresh => 'ERROR',
+                                            !$temperatureTelemetry => 'NO TEMP DATA',
+                                            !$temperatureIsFresh => 'STALE',
+                                            default => 'ONLINE',
+                                        };
 
                                         $statusClass = match ($status) {
                                             'ONLINE' => 'bg-emerald-400/10 text-emerald-300 ring-emerald-400/20',
-                                            'OFFLINE' => 'bg-rose-400/10 text-rose-300 ring-rose-400/20',
-                                            default => 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
+                                            'ERROR' => 'bg-rose-400/10 text-rose-300 ring-rose-400/20',
+                                            'STALE' => 'bg-amber-400/10 text-amber-300 ring-amber-400/20',
+                                            default => 'bg-slate-400/10 text-slate-300 ring-slate-400/20',
                                         };
+
+                                        $temperature = $temperatureTelemetry?->temperature;
+
+                                        $isOverTemperature = $temperature !== null
+                                            && $machine->temperature_threshold !== null
+                                            && (float) $temperature > (float) $machine->temperature_threshold;
                                     @endphp
 
                                     <span
@@ -299,9 +321,17 @@
                                         Temperature
                                     </div>
 
-                                    <div class="mt-1 text-sm font-semibold text-white">
-                                        {{ $telemetry?->temperature !== null ? number_format((float) $telemetry->temperature, 1) . ' °C' : '-- °C' }}
-                                    </div>
+                                   <div class="mt-1 text-sm font-semibold {{ $isOverTemperature ? 'text-rose-300' : 'text-white' }}">
+    {{ $temperature !== null
+        ? number_format((float) $temperature, 1) . ' °C'
+        : '-- °C' }}
+</div>
+
+@if ($isOverTemperature)
+    <p class="mt-1 text-[10px] text-rose-300">
+        Melebihi batas {{ number_format((float) $machine->temperature_threshold, 1) }} °C
+    </p>
+@endif
                                 </div>
 
                                 <div>
@@ -309,9 +339,9 @@
                                         Last Telemetry
                                     </div>
 
-                                    <div class="mt-1 text-sm font-semibold text-white">
-                                        {{ $telemetry?->created_at?->format('H:i:s') ?? '—' }}
-                                    </div>
+                                  <div class="mt-1 text-sm font-semibold text-white">
+    {{ $temperatureTelemetry?->created_at?->format('H:i:s') ?? '—' }}
+</div>
                                 </div>
 
                             </div>
@@ -385,10 +415,9 @@
 
                     </div>
 
-                    <span class="text-[10px] font-semibold text-emerald-300">
-                        ONLINE
-                    </span>
-
+                   <span class="text-[10px] font-semibold text-emerald-300">
+    {{ $backendHealth }}
+</span>
                 </div>
 
 
@@ -415,9 +444,9 @@
 
                     </div>
 
-                    <span class="text-[10px] font-semibold text-emerald-300">
-                        ONLINE
-                    </span>
+                   <span class="text-[10px] font-semibold text-emerald-300">
+    {{ $databaseHealth }}
+</span>
 
                 </div>
 
@@ -444,9 +473,14 @@
 
                     </div>
 
-                    <span class="text-[10px] font-semibold text-amber-300">
-                        READY
-                    </span>
+                    <span @class([
+    'text-[10px] font-semibold',
+    'text-emerald-300' => $mqttHealth === 'TCP REACHABLE',
+    'text-amber-300' => $mqttHealth === 'NOT CONFIGURED',
+    'text-rose-300' => $mqttHealth === 'UNREACHABLE',
+])>
+    {{ $mqttHealth }}
+</span>
 
                 </div>
 
@@ -484,86 +518,58 @@
             </div>
 
 
+
             <div class="divide-y divide-white/[0.05]">
+                @forelse ($recentActivities as $activity)
+                    @php
+                        [$iconClass, $symbol] = match ($activity['type']) {
+                            'error' => [
+                                'bg-rose-400/[0.06] text-rose-300',
+                                '!',
+                            ],
+                            'dispense' => [
+                                'bg-cyan-400/[0.06] text-cyan-300',
+                                '↗',
+                            ],
+                            default => [
+                                'bg-violet-400/[0.06] text-violet-300',
+                                '▤',
+                            ],
+                        };
+                    @endphp
 
-                <div class="flex items-start gap-4 px-5 py-4">
+                    <div class="flex items-start gap-4 px-5 py-4">
+                        <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg {{ $iconClass }}">
+                            {{ $symbol }}
+                        </div>
 
-                    <div
-                        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-400/[0.06] text-emerald-300">
-                        ✓
+                        <div class="min-w-0 flex-1">
+                            <p class="text-xs font-medium text-slate-300">
+                                {{ $activity['title'] }}
+                            </p>
+
+                            <p class="mt-1 break-words text-[10px] text-slate-500">
+                                {{ $activity['description'] }}
+                            </p>
+                        </div>
+
+                        <span class="shrink-0 text-[10px] text-slate-600"
+                            title="{{ $activity['occurred_at']?->format('d M Y H:i:s') ?? 'Waktu tidak tersedia' }}">
+                            {{ $activity['occurred_at']?->diffForHumans() ?? '—' }}
+                        </span>
                     </div>
-
-                    <div class="min-w-0 flex-1">
-
-                        <p class="text-xs font-medium text-slate-300">
-                            Machine VM-001 is online
+                @empty
+                    <div class="p-6 text-center">
+                        <p class="text-xs text-slate-400">
+                            Belum ada aktivitas tercatat.
                         </p>
-
                         <p class="mt-1 text-[10px] text-slate-600">
-                            System event
+                            Aktivitas akan muncul setelah ada pesanan, dispense, atau error mesin.
                         </p>
-
                     </div>
-
-                    <span class="text-[10px] text-slate-700">
-                        just now
-                    </span>
-
-                </div>
-
-
-                <div class="flex items-start gap-4 px-5 py-4">
-
-                    <div
-                        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-cyan-400/[0.06] text-cyan-300">
-                        ↑
-                    </div>
-
-                    <div class="min-w-0 flex-1">
-
-                        <p class="text-xs font-medium text-slate-300">
-                            Telemetry channel ready
-                        </p>
-
-                        <p class="mt-1 text-[10px] text-slate-600">
-                            MQTT
-                        </p>
-
-                    </div>
-
-                    <span class="text-[10px] text-slate-700">
-                        —
-                    </span>
-
-                </div>
-
-
-                <div class="flex items-start gap-4 px-5 py-4">
-
-                    <div
-                        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-400/[0.06] text-amber-300">
-                        !
-                    </div>
-
-                    <div class="min-w-0 flex-1">
-
-                        <p class="text-xs font-medium text-slate-300">
-                            No active machine errors
-                        </p>
-
-                        <p class="mt-1 text-[10px] text-slate-600">
-                            Monitoring
-                        </p>
-
-                    </div>
-
-                    <span class="text-[10px] text-slate-700">
-                        —
-                    </span>
-
-                </div>
-
+                @endforelse
             </div>
+
 
         </div>
 
@@ -587,7 +593,8 @@
 
                     </div>
 
-                    <a href="#" class="text-xs font-medium text-cyan-300">
+                    <a href="{{ route('stock-slots.index') }}"
+                        class="text-xs font-medium text-cyan-300 hover:text-cyan-200">
                         View stock
                     </a>
 
@@ -596,107 +603,62 @@
             </div>
 
 
+
             <div class="space-y-3 p-5">
+                @forelse ($lowStockSlots as $slot)
+                    @php
+                        $availableQty = $slot->availableQuantity();
+                        $isEmpty = $availableQty === 0;
 
-                <div class="rounded-xl border border-red-400/10 bg-red-400/[0.03] p-4">
+                        $alertClass = $isEmpty
+                            ? 'border-rose-400/10 bg-rose-400/[0.03]'
+                            : 'border-amber-400/10 bg-amber-400/[0.03]';
 
-                    <div class="flex items-center justify-between">
+                        $quantityClass = $isEmpty
+                            ? 'text-rose-300'
+                            : 'text-amber-300';
+                    @endphp
 
-                        <div>
+                    <div class="rounded-xl border p-4 {{ $alertClass }}">
+                        <div class="flex items-center justify-between gap-4">
+                            <div class="min-w-0">
+                                <p class="truncate text-xs font-semibold text-slate-200">
+                                    {{ $slot->slot_code }}
+                                    · {{ $slot->product?->name ?? 'Produk belum ditentukan' }}
+                                </p>
 
-                            <p class="text-xs font-semibold text-slate-200">
-                                A02 · Mie Goreng
-                            </p>
+                                <p class="mt-1 text-[10px] text-slate-500">
+                                    {{ $slot->machine?->machine_code ?? 'Mesin tidak diketahui' }}
+                                </p>
 
-                            <p class="mt-1 text-[10px] text-slate-600">
-                                Machine VM-001
-                            </p>
+                                <p class="mt-1 text-[10px] text-slate-600">
+                                    Kapasitas: {{ $slot->capacity }} unit
+                                </p>
+                            </div>
 
+                            <div class="shrink-0 text-right">
+                                <p class="text-sm font-semibold {{ $quantityClass }}">
+                                    {{ $availableQty }}
+                                </p>
+
+                                <p class="text-[9px] uppercase tracking-wider text-slate-500">
+                                    {{ $isEmpty ? 'Habis' : 'Tersedia' }}
+                                </p>
+                            </div>
                         </div>
-
-                        <div class="text-right">
-
-                            <p class="text-sm font-semibold text-red-300">
-                                1
-                            </p>
-
-                            <p class="text-[9px] uppercase tracking-wider text-slate-600">
-                                remaining
-                            </p>
-
-                        </div>
-
                     </div>
-
-                </div>
-
-
-                <div class="rounded-xl border border-amber-400/10 bg-amber-400/[0.03] p-4">
-
-                    <div class="flex items-center justify-between">
-
-                        <div>
-
-                            <p class="text-xs font-semibold text-slate-200">
-                                A01 · Nasi Goreng
-                            </p>
-
-                            <p class="mt-1 text-[10px] text-slate-600">
-                                Machine VM-001
-                            </p>
-
-                        </div>
-
-                        <div class="text-right">
-
-                            <p class="text-sm font-semibold text-amber-300">
-                                2
-                            </p>
-
-                            <p class="text-[9px] uppercase tracking-wider text-slate-600">
-                                remaining
-                            </p>
-
-                        </div>
-
+                @empty
+                    <div class="rounded-xl border border-dashed border-white/[0.08] p-6 text-center">
+                        <p class="text-xs font-medium text-slate-300">
+                            Tidak ada peringatan stok.
+                        </p>
+                        <p class="mt-1 text-[10px] text-slate-500">
+                            Semua slot memiliki stok siap jual di atas batas peringatan.
+                        </p>
                     </div>
-
-                </div>
-
-
-                <div class="rounded-xl border border-cyan-400/10 bg-cyan-400/[0.03] p-4">
-
-                    <div class="flex items-center justify-between">
-
-                        <div>
-
-                            <p class="text-xs font-semibold text-slate-200">
-                                A03 · Ayam Crispy
-                            </p>
-
-                            <p class="mt-1 text-[10px] text-slate-600">
-                                Machine VM-001
-                            </p>
-
-                        </div>
-
-                        <div class="text-right">
-
-                            <p class="text-sm font-semibold text-cyan-300">
-                                4
-                            </p>
-
-                            <p class="text-[9px] uppercase tracking-wider text-slate-600">
-                                remaining
-                            </p>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
+                @endforelse
             </div>
+
 
         </div>
 
