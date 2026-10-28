@@ -35,7 +35,7 @@ class InventoryController extends Controller
                 }
             )
             ->whereHas('product', function ($query) {
-                $query->where('is_active', true);
+                $query->whereRaw('"products"."is_active" IS TRUE');
             })
             ->orderBy('machine_id')
             ->orderBy('slot_code')
