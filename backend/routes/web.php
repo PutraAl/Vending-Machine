@@ -14,8 +14,11 @@ use App\Http\Controllers\Web\MachineErrorController;
 
 Route::get('/', function () {
     return view('auth.login');
-                        });
+});
 
+Route::get('/ping-api', fn() => response()->json([
+    'routes' => collect(app('router')->getRoutes())->map->uri()->values(),
+]));
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
     Route::post('/login', [AuthController::class, 'login'])->name('login.store');
