@@ -20,6 +20,20 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        $exceptions->report(function (\Throwable $e): void {
+            $message = str_replace(
+                ["\r", "\n"],
+                ' ',
+                $e->getMessage()
+            );
+
+            error_log(sprintf(
+                '[VERCEL_EXCEPTION_SUMMARY] %s: %s at %s:%d',
+                get_class($e),
+                $message,
+                basename($e->getFile()),
+                $e->getLine()
+            ));
+        });
     })
     ->create();
