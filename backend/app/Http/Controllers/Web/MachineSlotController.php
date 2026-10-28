@@ -37,10 +37,9 @@ class MachineSlotController extends Controller
             ->get();
 
         $products = Product::query()
-            ->where('is_active', true)
+            ->whereRaw('"is_active" IS TRUE')
             ->orderBy('name')
             ->get();
-
         return view('stock-slots.show', compact(
             'machine',
             'slots',
