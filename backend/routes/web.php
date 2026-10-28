@@ -14,7 +14,7 @@ use App\Http\Controllers\Web\MachineErrorController;
 
 Route::get('/', function () {
     return view('auth.login');
-});
+                        });
 
 Route::middleware('guest')->group(function (): void {
     Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
