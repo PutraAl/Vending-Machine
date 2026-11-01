@@ -44,7 +44,7 @@ class ProductController extends Controller
                 $request->user() === null,
                 function ($query) {
                     // Kiosk/public hanya boleh melihat produk aktif.
-                    $query->where('is_active', true);
+                    $query->whereRaw('"products"."is_active" IS TRUE');
                 }
             )
             ->when(

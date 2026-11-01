@@ -215,7 +215,7 @@ Route::prefix('v1')->group(function (): void {
 
         // Route::post('/dispenses/{dispense}/fail', [
         //     DispenseController::class,
-        //     'fail',
+        //     'fail', 
         // ])->middleware('role:admin,operator');
     });
 });
