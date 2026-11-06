@@ -75,31 +75,32 @@ class MQTTClient:
             "MQTT_PASSWORD"
         )
 
-        if not self.username or not self.password:
+        if bool(self.username) != bool(self.password):
             raise ValueError(
-                "MQTT_USERNAME and MQTT_PASSWORD "
-                "must be configured in .env."
+                "MQTT_USERNAME and MQTT_PASSWORD must be configured together."
             )
 
         # ======================================
         # TLS CERTIFICATE
         # ======================================
 
-        raw_ca_path = os.getenv(
-            "MQTT_CA_CERT",
-            "certs/ca-trust.crt"
-        )
+        self.tls_enabled = os.getenv(
+            "MQTT_TLS_ENABLED", "true"
+        ).strip().lower() in ("1", "true", "yes", "on")
 
-        self.ca_file = Path(raw_ca_path)
+        if self.tls_enabled:
+            raw_ca_path = os.getenv("MQTT_CA_CERT", "").strip()
 
-        if not self.ca_file.is_absolute():
-            self.ca_file = PROJECT_ROOT / self.ca_file
+            if raw_ca_path:
+                self.ca_file = Path(raw_ca_path)
 
-        if not self.ca_file.is_file():
-            raise FileNotFoundError(
-                f"MQTT CA certificate not found: "
-                f"{self.ca_file}"
-            )
+                if not self.ca_file.is_absolute():
+                    self.ca_file = PROJECT_ROOT / self.ca_file
+
+                if not self.ca_file.is_file():
+                    raise FileNotFoundError(
+                        f"MQTT CA certificate not found: {self.ca_file}"
+                    )
 
         # ======================================
         # CONNECTION STATE
@@ -125,24 +126,25 @@ class MQTTClient:
         )
 
         # Account authentication
-        self.client.username_pw_set(
-            self.username,
-            self.password
-        )
+        if self.username:
+            self.client.username_pw_set(self.username, self.password)
 
         # ======================================
         # TLS SECURITY
         # ======================================
 
-        tls_context = ssl.create_default_context(
-            cafile=str(self.ca_file)
-        )
+        if self.tls_enabled:
+            tls_context = (
+                ssl.create_default_context(cafile=str(self.ca_file))
+                if hasattr(self, "ca_file")
+                else ssl.create_default_context()
+            )
 
-        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
-        tls_context.verify_mode = ssl.CERT_REQUIRED
-        tls_context.check_hostname = True
+            tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+            tls_context.verify_mode = ssl.CERT_REQUIRED
+            tls_context.check_hostname = True
 
-        self.client.tls_set_context(tls_context)
+            self.client.tls_set_context(tls_context)
 
         # ======================================
         # RECONNECTION

@@ -18,15 +18,15 @@ class MQTTSubscriber:
             os.getenv("MQTT_MACHINE_ID", "1")
         )
 
-        # Temporary compatibility settings.
-        # These will become mandatory after Laravel is updated.
+        # Laravel commands include machine identity and expiry; require both
+        # by default while keeping environment switches for controlled legacy use.
         self.require_machine_id = (
-            os.getenv("MQTT_REQUIRE_MACHINE_ID", "false").lower()
+            os.getenv("MQTT_REQUIRE_MACHINE_ID", "true").lower()
             == "true"
         )
 
         self.require_command_expiry = (
-            os.getenv("MQTT_REQUIRE_COMMAND_EXPIRY", "false").lower()
+            os.getenv("MQTT_REQUIRE_COMMAND_EXPIRY", "true").lower()
             == "true"
         )
 
@@ -233,22 +233,19 @@ class MQTTSubscriber:
         try:
             raw_message = message.payload.decode("utf-8")
             payload = json.loads(raw_message)
+
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            print(
-            f"[MQTT] Invalid JSON received: {error}"
-        )
+            print(f"[MQTT] Invalid JSON received: {error}")
+            print(f"[MQTT] Raw payload: {message.payload!r}")
 
-            print(
-                f"[MQTT] Raw payload received: {message.payload!r}"
-        )
-
-        self.publisher.publish_error("INVALID_COMMAND_JSON")
-        return
+            self.publisher.publish_error("INVALID_COMMAND_JSON")
+            return
 
         if not isinstance(payload, dict):
             print("[SIMULATOR] Command payload must be a JSON object.")
             self.publisher.publish_error("INVALID_DISPENSE_COMMAND")
             return
+
                 # ==========================================
         # MACHINE ID VALIDATION
         # ==========================================

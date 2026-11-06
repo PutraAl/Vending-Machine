@@ -14,15 +14,12 @@ class MqttService
     {
         $username = config('mqtt.publisher.username');
         $password = config('mqtt.publisher.password');
+        $hasUsername = is_string($username) && trim($username) !== '';
+        $hasPassword = is_string($password) && $password !== '';
 
-        if (
-            ! is_string($username)
-            || trim($username) === ''
-            || ! is_string($password)
-            || $password === ''
-        ) {
+        if ($hasUsername !== $hasPassword) {
             throw new RuntimeException(
-                'MQTT publisher credentials are not configured.'
+                'MQTT publisher username and password must be configured together.'
             );
         }
 
@@ -54,6 +51,7 @@ class MqttService
                 || ! $verifyPeer
                 || ! $verifyPeerName
                 || $allowSelfSigned
+                || ! $hasUsername
             )
         ) {
             throw new RuntimeException(
@@ -97,9 +95,13 @@ class MqttService
             )
             ->setSocketTimeout(
                 (int) config('mqtt.socket_timeout', 5)
-            )
-            ->setUsername($username)
-            ->setPassword($password);
+            );
+
+        if ($hasUsername) {
+            $settings = $settings
+                ->setUsername($username)
+                ->setPassword((string) $password);
+        }
 
         if ($tlsEnabled) {
             $settings = $settings
@@ -128,7 +130,11 @@ class MqttService
         return $settings;
     }
 
-    public function publish(string $topic, array $payload): void
+    public function publish(
+        string $topic,
+        array $payload,
+        int $qos = MqttClient::QOS_AT_MOST_ONCE
+    ): void
     {
         $host = config('mqtt.host');
         $port = (int) config('mqtt.port', 8883);
@@ -166,12 +172,10 @@ class MqttService
                 | JSON_UNESCAPED_SLASHES
             );
 
-            // QoS 0 is retained temporarily.
-            // QoS 1 will be introduced with explicit PUBACK handling.
             $client->publish(
                 $topic,
                 $message,
-                MqttClient::QOS_AT_MOST_ONCE,
+                $qos,
                 false
             );
 
@@ -206,6 +210,7 @@ class MqttService
 
     public function publishDispenseCommand(
         int $dispenseId,
+        int $machineId,
         string $slot,
         int $quantity
     ): void {
@@ -214,9 +219,12 @@ class MqttService
             [
                 'command' => 'DISPENSE',
                 'dispense_id' => $dispenseId,
+                'machine_id' => $machineId,
                 'slot' => $slot,
                 'quantity' => $quantity,
-            ]
+                'expires_at' => now('UTC')->addSeconds(55)->toIso8601String(),
+            ],
+            MqttClient::QOS_AT_LEAST_ONCE
         );
     }
 }

@@ -100,7 +100,7 @@ return [
 
         'enabled' => (bool) env(
             'MQTT_TLS_ENABLED',
-            false
+            true
         ),
 
         'verify_peer' => (bool) env(

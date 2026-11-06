@@ -49,7 +49,7 @@ def main():
     print("[SIMULATOR] Press CTRL+C to stop.")
 
     try:
-         while True:
+        while True:
             time.sleep(telemetry_interval)
 
             publisher.publish_temperature(

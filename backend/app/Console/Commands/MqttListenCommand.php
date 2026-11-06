@@ -60,15 +60,12 @@ class MqttListenCommand extends Command
 
         $username = config('mqtt.listener.username');
         $password = config('mqtt.listener.password');
+        $hasUsername = is_string($username) && trim($username) !== '';
+        $hasPassword = is_string($password) && $password !== '';
 
-        if (
-            ! is_string($username)
-            || trim($username) === ''
-            || ! is_string($password)
-            || $password === ''
-        ) {
+        if ($hasUsername !== $hasPassword) {
             throw new \RuntimeException(
-                'MQTT listener credentials are not configured.'
+                'MQTT listener username and password must be configured together.'
             );
         }
 
@@ -96,6 +93,7 @@ class MqttListenCommand extends Command
                 || ! $verifyPeer
                 || ! $verifyPeerName
                 || $allowSelfSigned
+                || ! $hasUsername
             )
         ) {
             throw new \RuntimeException(
@@ -138,9 +136,13 @@ class MqttListenCommand extends Command
             )
             ->setSocketTimeout(
                 (int) config('mqtt.socket_timeout', 5)
-            )
-            ->setUsername($username)
-            ->setPassword($password);
+            );
+
+        if ($hasUsername) {
+            $connectionSettings = $connectionSettings
+                ->setUsername($username)
+                ->setPassword((string) $password);
+        }
 
         if ($tlsEnabled) {
             $connectionSettings = $connectionSettings
@@ -164,15 +166,6 @@ class MqttListenCommand extends Command
                 $connectionSettings = $connectionSettings
                     ->setTlsCertificateAuthorityPath($caPath);
             }
-        }
-
-
-        if ($username !== null && $username !== '') {
-            $connectionSettings->setUsername($username);
-        }
-
-        if ($password !== null && $password !== '') {
-            $connectionSettings->setPassword($password);
         }
 
         $mqtt = new MqttClient(
@@ -208,7 +201,7 @@ class MqttListenCommand extends Command
                         fn () => $this->handleStatusMessage($topic, $message)
                     );
                 },
-                0
+                1
             );
 
             /*
@@ -226,7 +219,7 @@ class MqttListenCommand extends Command
                         fn () => $this->handleErrorMessage($topic, $message)
                     );
                 },
-                0
+                1
             );
 
             /*

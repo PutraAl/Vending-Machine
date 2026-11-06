@@ -147,6 +147,7 @@ class DispenseService
         try {
             $this->mqttService->publishDispenseCommand(
                 $dispense->id,
+                (int) $dispense->machine_id,
                 $dispense->slot->slot_code,
                 $dispense->order->items->first()->quantity
             );
