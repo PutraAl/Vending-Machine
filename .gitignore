@@ -169,3 +169,7 @@ verifikasi-mqtt-listener.txt
 *~
 .vercel
 .env*
+
+*.env copy
+.env *
+*.zip
