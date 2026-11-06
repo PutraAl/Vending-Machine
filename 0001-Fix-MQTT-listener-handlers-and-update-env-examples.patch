@@ -1,0 +1,258 @@
+From 273070c0b3801f32824ccd6c3778d8d136c19774 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 6 Nov 2026 20:26:01 +0700
+Subject: [PATCH] Fix MQTT listener handlers and update env examples
+
+- inventory handler: remove copy-pasted temperature check that made
+  every inventory message return early
+- status/temperature handlers: verify the machine exists before
+  inserting telemetry (FK violation previously stopped the listener)
+- wrap each subscribe callback so one failing message is logged
+  instead of terminating mqtt:listen
+- correct misleading warning labels
+- simulator/backend .env.example: TLS port 8883, credentials, CA path
+  and machine id variables matching the actual config
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0122y7ftEnFuvwXT6Cz31oWe
+---
+ backend/.env.example                          | 26 +++++-
+ .../Console/Commands/MqttListenCommand.php    | 81 ++++++++++++-------
+ simulator/.env.example                        | 22 ++++-
+ 3 files changed, 95 insertions(+), 34 deletions(-)
+
+diff --git a/backend/.env.example b/backend/.env.example
+index 0f14b7d..9100689 100644
+--- a/backend/.env.example
++++ b/backend/.env.example
+@@ -67,14 +67,32 @@ VITE_APP_NAME="${APP_NAME}"
+ 
+ 
+ MQTT_BROKER=127.0.0.1
+-MQTT_PORT=1883
+-MQTT_CLIENT_ID=laravel-vending-backend
++MQTT_PORT=8883
+ MQTT_PROTOCOL=3.1.1
+-MQTT_USERNAME=
+-MQTT_PASSWORD=
+ MQTT_KEEP_ALIVE=60
+ MQTT_CLEAN_SESSION=true
+ 
++# Client ID (publisher dan listener harus berbeda)
++MQTT_PUBLISHER_CLIENT_ID=laravel-vending-publisher
++MQTT_LISTENER_CLIENT_ID=laravel-vending-listener
++
++# Akun backend (harus ada di password file dan ACL broker)
++MQTT_USERNAME=
++MQTT_PASSWORD=
++# Opsional: akun terpisah untuk publisher dan listener
++# MQTT_PUBLISHER_USERNAME=
++# MQTT_PUBLISHER_PASSWORD=
++# MQTT_LISTENER_USERNAME=
++# MQTT_LISTENER_PASSWORD=
++
++# TLS (wajib aktif dan terverifikasi di production)
++MQTT_TLS_ENABLED=true
++MQTT_TLS_VERIFY_PEER=true
++MQTT_TLS_VERIFY_PEER_NAME=true
++MQTT_TLS_ALLOW_SELF_SIGNED=false
++# Path absolut ke CA, misalnya C:/Vending-Machine-System/MQTT/certs/ca-trust.crt
++MQTT_TLS_CA_FILE=
++
+ # Postgree lokal
+ # DB_CONNECTION=pgsql
+ # DB_HOST=127.0.0.1
+diff --git a/backend/app/Console/Commands/MqttListenCommand.php b/backend/app/Console/Commands/MqttListenCommand.php
+index c28cc71..d1b590a 100644
+--- a/backend/app/Console/Commands/MqttListenCommand.php
++++ b/backend/app/Console/Commands/MqttListenCommand.php
+@@ -203,9 +203,9 @@ function (
+                     string $message,
+                     bool $retained
+                 ): void {
+-                    $this->handleStatusMessage(
+-                        $topic,
+-                        $message
++                    $this->safely(
++                        'status',
++                        fn () => $this->handleStatusMessage($topic, $message)
+                     );
+                 },
+                 0
+@@ -221,9 +221,9 @@ function (
+                     string $message,
+                     bool $retained
+                 ): void {
+-                    $this->handleErrorMessage(
+-                        $topic,
+-                        $message
++                    $this->safely(
++                        'error',
++                        fn () => $this->handleErrorMessage($topic, $message)
+                     );
+                 },
+                 0
+@@ -239,9 +239,9 @@ function (
+                     string $message,
+                     bool $retained
+                 ): void {
+-                    $this->handleTemperatureMessage(
+-                        $topic,
+-                        $message
++                    $this->safely(
++                        'temperature',
++                        fn () => $this->handleTemperatureMessage($topic, $message)
+                     );
+                 },
+                 0
+@@ -257,9 +257,9 @@ function (
+                     string $message,
+                     bool $retained
+                 ): void {
+-                    $this->handleInventoryMessage(
+-                        $topic,
+-                        $message
++                    $this->safely(
++                        'inventory',
++                        fn () => $this->handleInventoryMessage($topic, $message)
+                     );
+                 },
+                 0
+@@ -329,13 +329,21 @@ private function handleStatusMessage(
+         }
+ 
+         $machineId = $this->getMachineId($payload);
++
+         if (! $machineId) {
+             $this->warn(
+-                '[MQTT] Error message has missing or invalid machine_id.'
++                '[MQTT] Status message has missing or invalid machine_id.'
+             );
+ 
+             return;
+         }
++
++        if (! Machine::whereKey($machineId)->exists()) {
++            $this->warn("[MQTT] Machine {$machineId} was not found.");
++
++            return;
++        }
++
+         $state = $payload['state'] ?? null;
+         $dispenseId = $payload['dispense_id'] ?? null;
+ 
+@@ -575,19 +583,24 @@ private function handleTemperatureMessage(
+         }
+ 
+         $machineId = $this->getMachineId($payload);
++
+         if (! $machineId) {
+             $this->warn(
+-                '[MQTT] Error message has missing or invalid machine_id.'
++                '[MQTT] Temperature message has missing or invalid machine_id.'
+             );
+ 
+             return;
+         }
++
++        if (! Machine::whereKey($machineId)->exists()) {
++            $this->warn("[MQTT] Machine {$machineId} was not found.");
++
++            return;
++        }
++
+         $temperature = $payload['temperature'] ?? null;
+ 
+-        if (
+-            ! $machineId
+-            || ! is_numeric($temperature)
+-        ) {
++        if (! is_numeric($temperature)) {
+             $this->warn(
+                 '[MQTT] Temperature message is invalid.'
+             );
+@@ -637,23 +650,15 @@ private function handleInventoryMessage(
+         }
+ 
+         $machineId = $this->getMachineId($payload);
+-        $temperature = $payload['temperature'] ?? null;
+-
+-        if (! $machineId || ! is_numeric($temperature)) {
+-            $this->warn(
+-                '[MQTT] Temperature message is invalid.'
+-            );
+-
+-            return;
+-        }
+ 
+         if (! $machineId) {
+             $this->warn(
+-                '[MQTT] Error message has missing or invalid machine_id.'
++                '[MQTT] Inventory message has missing or invalid machine_id.'
+             );
+ 
+             return;
+         }
++
+         $slotCode = $payload['slot'] ?? null;
+         $currentQty = $payload['current_qty'] ?? null;
+ 
+@@ -825,6 +830,26 @@ private function failDispense(
+         }
+     }
+ 
++    /**
++     * Run one message handler so that a failure while processing a single
++     * message is logged instead of stopping the whole listener.
++     */
++    private function safely(string $label, callable $callback): void
++    {
++        try {
++            $callback();
++        } catch (Throwable $exception) {
++            Log::error("MQTT {$label} handler failed.", [
++                'error' => $exception->getMessage(),
++            ]);
++
++            $this->error(
++                "[MQTT] {$label} handler failed: "
++                    . $exception->getMessage()
++            );
++        }
++    }
++
+     private function decodePayload(
+         string $message
+     ): ?array {
+diff --git a/simulator/.env.example b/simulator/.env.example
+index fad722c..cce01b3 100644
+--- a/simulator/.env.example
++++ b/simulator/.env.example
+@@ -1,3 +1,21 @@
++# Broker (TLS + autentikasi, sesuai MQTT/config/mosquitto-test.conf)
+ MQTT_BROKER=localhost
+-MQTT_PORT=1883
+-MQTT_CLIENT_ID=vending-simulator
+\ No newline at end of file
++MQTT_PORT=8883
++MQTT_CLIENT_ID=vending-simulator-machine-1
++MQTT_KEEPALIVE=60
++MQTT_CONNECT_TIMEOUT=15
++MQTT_QOS=1
++
++# Akun simulator (user ini harus ada di password file dan ACL broker)
++MQTT_USERNAME=
++MQTT_PASSWORD=
++
++# Sertifikat CA yang dipercaya (path relatif terhadap folder simulator, atau absolut)
++MQTT_CA_CERT=certs/ca-trust.crt
++
++# Identitas mesin (harus sama dengan machines.id di database Laravel)
++MQTT_MACHINE_ID=1
++
++# Simulasi
++SIMULATOR_TEMPERATURE_C=72.5
++TEMPERATURE_TELEMETRY_INTERVAL=5
+-- 
+2.43.0
+

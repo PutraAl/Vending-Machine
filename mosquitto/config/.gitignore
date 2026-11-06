@@ -1,0 +1,8 @@
+# Local secrets and private TLS material
+config/password.txt
+config/acl.txt
+certs/
+python-test/.env
+*.key
+*.csr
+*.srl
