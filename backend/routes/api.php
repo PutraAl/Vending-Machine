@@ -11,9 +11,10 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\InventoryController;
 use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\DispenseReconciliationController;
+use App\Http\Controllers\Api\MqttIngestController;
 
 Route::prefix('v1')->group(function (): void {
-
+    Route::post('/mqtt/ingest', MqttIngestController::class);
     /*
     |--------------------------------------------------------------------------
     | Authentication
