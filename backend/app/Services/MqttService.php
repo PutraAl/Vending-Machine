@@ -221,7 +221,7 @@ class MqttService
             Log::error('MQTT publish failed.', $diagnostic);
 
             throw new RuntimeException(
-                'Failed to publish MQTT message.',
+                'Failed to publish MQTT message: ' . $rootCause->getMessage(),
                 0,
                 $exception
             );
