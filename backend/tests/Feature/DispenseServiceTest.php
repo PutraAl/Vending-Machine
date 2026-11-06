@@ -35,6 +35,7 @@ class DispenseServiceTest extends TestCase
             'name' => 'Nasi Goreng',
             'price' => 15000,
             'is_active' => true,
+            
         ]);
 
         $slot = MachineSlot::create([

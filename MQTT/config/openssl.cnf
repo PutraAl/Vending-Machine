@@ -1,0 +1,11 @@
+[ req ]
+default_bits = 4096
+distinguished_name = req_distinguished_name
+prompt = no
+
+[ req_distinguished_name ]
+CN = Vending MQTT Local Test CA
+
+[ v3_ca ]
+basicConstraints = critical, CA:true
+keyUsage = critical, keyCertSign, cRLSign

@@ -1,16 +1,47 @@
 
 import json
+import os
 import sqlite3
 import time
+
+from datetime import datetime, timezone
 from pathlib import Path
 
 from mqtt.publisher import MQTTPublisher
-
 
 class MQTTSubscriber:
     def __init__(self, mqtt_client):
         self.mqtt = mqtt_client
         self.publisher = MQTTPublisher(mqtt_client)
+        # Machine identity
+        self.machine_id = int(
+            os.getenv("MQTT_MACHINE_ID", "1")
+        )
+
+        # Temporary compatibility settings.
+        # These will become mandatory after Laravel is updated.
+        self.require_machine_id = (
+            os.getenv("MQTT_REQUIRE_MACHINE_ID", "false").lower()
+            == "true"
+        )
+
+        self.require_command_expiry = (
+            os.getenv("MQTT_REQUIRE_COMMAND_EXPIRY", "false").lower()
+            == "true"
+        )
+
+        self.max_command_ttl_seconds = int(
+            os.getenv("MQTT_MAX_COMMAND_TTL_SECONDS", "60")
+        )
+
+        # Test-only failure simulation
+        self.allow_test_failures = (
+            os.getenv("SIMULATOR_ALLOW_TEST_FAILURES", "false").lower()
+            == "true"
+        )
+
+        if self.max_command_ttl_seconds <= 0:
+            raise ValueError("MQTT_MAX_COMMAND_TTL_SECONDS must be positive.")
 
         # Persistent command history.
         # Stored locally so processed dispense IDs survive restarts.
@@ -159,7 +190,16 @@ class MQTTSubscriber:
 
     def subscribe_commands(self):
         topic = "vending/machine/command"
-        self.mqtt.client.subscribe(topic)
+
+        success = self.mqtt.subscribe(
+            topic,
+            qos=1
+        )
+
+        if not success:
+            raise RuntimeError(
+                f"Failed to subscribe to {topic}"
+            )
 
         print(f"[MQTT] Subscribed -> {topic}")
         print(
@@ -168,22 +208,191 @@ class MQTTSubscriber:
         )
 
     def _on_message(self, client, userdata, message):
+                # Security: reject retained commands.
+        if message.retain:
+            print(
+                "[SECURITY] Retained command rejected."
+            )
+
+            self.publisher.publish_error(
+                "RETAINED_COMMAND_REJECTED"
+            )
+            return
+
+        # Dispense commands must use QoS 1 or higher.
+        if message.qos < 1:
+            print(
+                "[SECURITY] Command rejected: "
+                "QoS below 1."
+            )
+
+            self.publisher.publish_error(
+                "COMMAND_QOS_TOO_LOW"
+            )
+            return
         try:
             raw_message = message.payload.decode("utf-8")
             payload = json.loads(raw_message)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            print(f"[MQTT] Invalid JSON received: {error}")
-            self.publisher.publish_error("INVALID_COMMAND_JSON")
-            return
+            print(
+            f"[MQTT] Invalid JSON received: {error}"
+        )
+
+            print(
+                f"[MQTT] Raw payload received: {message.payload!r}"
+        )
+
+        self.publisher.publish_error("INVALID_COMMAND_JSON")
+        return
 
         if not isinstance(payload, dict):
             print("[SIMULATOR] Command payload must be a JSON object.")
             self.publisher.publish_error("INVALID_DISPENSE_COMMAND")
             return
+                # ==========================================
+        # MACHINE ID VALIDATION
+        # ==========================================
 
+        raw_machine_id = payload.get("machine_id")
+
+        if raw_machine_id is None:
+
+            if self.require_machine_id:
+                print(
+                    "[SECURITY] Command rejected: "
+                    "machine_id is required."
+                )
+
+                self.publisher.publish_error(
+                    "MISSING_MACHINE_ID"
+                )
+                return
+
+            print(
+                "[SECURITY] Warning: command has no machine_id. "
+                "Compatibility mode is enabled."
+            )
+
+        else:
+
+            try:
+                if isinstance(raw_machine_id, bool):
+                    raise ValueError("Boolean machine_id is invalid")
+
+                if isinstance(raw_machine_id, int):
+                    command_machine_id = raw_machine_id
+
+                elif (
+                    isinstance(raw_machine_id, str)
+                    and raw_machine_id.strip().isdigit()
+                ):
+                    command_machine_id = int(raw_machine_id.strip())
+
+                else:
+                    raise ValueError("Invalid machine_id format")
+
+            except ValueError:
+                self.publisher.publish_error(
+                    "INVALID_MACHINE_ID"
+                )
+                return
+
+            if command_machine_id != self.machine_id:
+
+                print(
+                    f"[SECURITY] Command rejected: "
+                    f"target machine={command_machine_id}, "
+                    f"current machine={self.machine_id}"
+                )
+
+                self.publisher.publish_error(
+                    "WRONG_MACHINE_ID"
+                )
+                return
         print(f"\n[MQTT] Raw message: {raw_message}")
         print(f"[MQTT] Command received: {payload}")
 
+        # ==========================================
+        # COMMAND EXPIRY VALIDATION
+        # ==========================================
+
+        raw_expires_at = payload.get("expires_at")
+
+        if raw_expires_at is None:
+
+            if self.require_command_expiry:
+                print(
+                    "[SECURITY] Command rejected: "
+                    "expires_at is required."
+                )
+
+                self.publisher.publish_error(
+                    "MISSING_COMMAND_EXPIRY"
+                )
+                return
+
+            print(
+                "[SECURITY] Warning: command has no expires_at. "
+                "Compatibility mode is enabled."
+            )
+
+        else:
+
+            try:
+                if not isinstance(raw_expires_at, str):
+                    raise ValueError("expires_at must be a string")
+
+                expiry_text = raw_expires_at.strip()
+
+                if expiry_text.endswith("Z"):
+                    expiry_text = (
+                        expiry_text[:-1] + "+00:00"
+                    )
+
+                expiry = datetime.fromisoformat(expiry_text)
+
+                if expiry.tzinfo is None:
+                    raise ValueError(
+                        "expires_at must include timezone."
+                    )
+
+                now = datetime.now(timezone.utc)
+
+                remaining_seconds = (
+                    expiry.astimezone(timezone.utc) - now
+                ).total_seconds()
+
+                if remaining_seconds <= 0:
+                    print(
+                        "[SECURITY] Expired command rejected."
+                    )
+
+                    self.publisher.publish_error(
+                        "COMMAND_EXPIRED"
+                    )
+                    return
+
+                if remaining_seconds > self.max_command_ttl_seconds:
+                    print(
+                        "[SECURITY] Command expiry exceeds "
+                        "maximum permitted TTL."
+                    )
+
+                    self.publisher.publish_error(
+                        "COMMAND_TTL_TOO_LONG"
+                    )
+                    return
+
+            except (ValueError, TypeError, OverflowError) as error:
+
+                print(
+                    f"[SECURITY] Invalid command expiry: {error}"
+                )
+
+                self.publisher.publish_error(
+                    "INVALID_COMMAND_EXPIRY"
+                )
+                return
         command = payload.get("command")
 
         if command != "DISPENSE":
@@ -253,7 +462,17 @@ class MQTTSubscriber:
                 slot=slot,
             )
             return
+        if simulate_error and not self.allow_test_failures:
+            print(
+                "[SECURITY] Test failure simulation is disabled."
+            )
 
+            self.publisher.publish_error(
+                "TEST_FAILURE_SIMULATION_DISABLED",
+                dispense_id=dispense_id,
+                slot=slot,
+            )
+            return
         try:
             claim = self._claim_command(
                 dispense_id=dispense_id,
@@ -372,7 +591,7 @@ class MQTTSubscriber:
         slot,
         quantity,
         simulate_error=False,
-    ):
+    ): 
         print(
             f"[SIMULATOR] Starting dispense "
             f"dispense_id={dispense_id}, "

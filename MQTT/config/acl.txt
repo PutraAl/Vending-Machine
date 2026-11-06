@@ -1,0 +1,13 @@
+user vending_backend_test
+topic write vending/machine/command
+topic read vending/machine/status
+topic read vending/machine/temperature
+topic read vending/machine/inventory
+topic read vending/machine/error
+
+user vending_simulator_test
+topic read vending/machine/command
+topic write vending/machine/status
+topic write vending/machine/temperature
+topic write vending/machine/inventory
+topic write vending/machine/error

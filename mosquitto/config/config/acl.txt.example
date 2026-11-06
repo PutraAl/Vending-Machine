@@ -1,0 +1,21 @@
+# Draft ACL based on previously discussed topic names.
+# Confirm against the actual current simulator/backend code before relying on it.
+# Backend may send command; simulator may only receive command.
+
+user vending_backend
+topic write vending/machine/command
+topic read vending/machine/status
+topic read vending/machine/telemetry
+topic read vending/machine/error
+topic read vending/machine/temperature
+topic read vending/machine/stock
+topic read vending/machine/door
+
+user vending_simulator_3
+topic read vending/machine/command
+topic write vending/machine/status
+topic write vending/machine/telemetry
+topic write vending/machine/error
+topic write vending/machine/temperature
+topic write vending/machine/stock
+topic write vending/machine/door
