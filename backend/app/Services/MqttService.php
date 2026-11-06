@@ -62,6 +62,17 @@ class MqttService
         $caFile = config('mqtt.tls.ca_file');
         $caPath = config('mqtt.tls.ca_path');
 
+        if (is_string($caFile) && trim($caFile) !== '') {
+            $caFile = trim($caFile);
+
+            $isAbsolutePath = str_starts_with($caFile, '/')
+                || preg_match('/^[A-Za-z]:[\/\\\\]/', $caFile) === 1;
+
+            if (! $isAbsolutePath) {
+                $caFile = base_path($caFile);
+            }
+        }
+
         if (
             $tlsEnabled
             && is_string($caFile)
@@ -134,8 +145,7 @@ class MqttService
         string $topic,
         array $payload,
         int $qos = MqttClient::QOS_AT_MOST_ONCE
-    ): void
-    {
+    ): void {
         $host = config('mqtt.host');
         $port = (int) config('mqtt.port', 8883);
         $clientId = config('mqtt.client_id');
@@ -169,7 +179,7 @@ class MqttService
             $message = json_encode(
                 $payload,
                 JSON_THROW_ON_ERROR
-                | JSON_UNESCAPED_SLASHES
+                    | JSON_UNESCAPED_SLASHES
             );
 
             $client->publish(
@@ -183,7 +193,6 @@ class MqttService
                 'topic' => $topic,
                 'payload' => $payload,
             ]);
-
         } catch (Throwable $exception) {
 
             Log::error('MQTT publish failed.', [
@@ -197,7 +206,6 @@ class MqttService
                 0,
                 $exception
             );
-
         } finally {
 
             try {
