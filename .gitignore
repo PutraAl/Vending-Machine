@@ -167,3 +167,5 @@ verifikasi-mqtt-listener.txt
 *.swp
 *.swo
 *~
+.vercel
+.env*
