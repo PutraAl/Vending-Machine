@@ -195,11 +195,30 @@ class MqttService
             ]);
         } catch (Throwable $exception) {
 
-            Log::error('MQTT publish failed.', [
+            $rootCause = $exception;
+
+            while ($rootCause->getPrevious() !== null) {
+                $rootCause = $rootCause->getPrevious();
+            }
+
+            $diagnostic = [
                 'topic' => $topic,
-                'payload' => $payload,
-                'error' => $exception->getMessage(),
-            ]);
+                'host' => $host,
+                'port' => $port,
+                'client_id' => $clientId,
+                'exception_class' => get_class($exception),
+                'exception_message' => $exception->getMessage(),
+                'root_cause_class' => get_class($rootCause),
+                'root_cause_message' => $rootCause->getMessage(),
+                'root_cause_code' => $rootCause->getCode(),
+            ];
+
+            error_log(
+                '[MQTT_PUBLISH_DIAGNOSTIC] '
+                    . json_encode($diagnostic, JSON_UNESCAPED_SLASHES)
+            );
+
+            Log::error('MQTT publish failed.', $diagnostic);
 
             throw new RuntimeException(
                 'Failed to publish MQTT message.',
