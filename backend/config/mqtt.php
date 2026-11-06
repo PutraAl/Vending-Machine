@@ -2,7 +2,7 @@
 <?php
 
 return [
-
+    'ingest_token' => env('MQTT_INGEST_TOKEN'),
     'host' => env('MQTT_BROKER', '127.0.0.1'),
 
     'port' => (int) env('MQTT_PORT', 8883),
