@@ -203,9 +203,9 @@ class MqttListenCommand extends Command
                     string $message,
                     bool $retained
                 ): void {
-                    $this->handleStatusMessage(
-                        $topic,
-                        $message
+                    $this->safely(
+                        'status',
+                        fn () => $this->handleStatusMessage($topic, $message)
                     );
                 },
                 0
@@ -221,9 +221,9 @@ class MqttListenCommand extends Command
                     string $message,
                     bool $retained
                 ): void {
-                    $this->handleErrorMessage(
-                        $topic,
-                        $message
+                    $this->safely(
+                        'error',
+                        fn () => $this->handleErrorMessage($topic, $message)
                     );
                 },
                 0
@@ -239,9 +239,9 @@ class MqttListenCommand extends Command
                     string $message,
                     bool $retained
                 ): void {
-                    $this->handleTemperatureMessage(
-                        $topic,
-                        $message
+                    $this->safely(
+                        'temperature',
+                        fn () => $this->handleTemperatureMessage($topic, $message)
                     );
                 },
                 0
@@ -257,9 +257,9 @@ class MqttListenCommand extends Command
                     string $message,
                     bool $retained
                 ): void {
-                    $this->handleInventoryMessage(
-                        $topic,
-                        $message
+                    $this->safely(
+                        'inventory',
+                        fn () => $this->handleInventoryMessage($topic, $message)
                     );
                 },
                 0
@@ -329,13 +329,21 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+
         if (! $machineId) {
             $this->warn(
-                '[MQTT] Error message has missing or invalid machine_id.'
+                '[MQTT] Status message has missing or invalid machine_id.'
             );
 
             return;
         }
+
+        if (! Machine::whereKey($machineId)->exists()) {
+            $this->warn("[MQTT] Machine {$machineId} was not found.");
+
+            return;
+        }
+
         $state = $payload['state'] ?? null;
         $dispenseId = $payload['dispense_id'] ?? null;
 
@@ -575,19 +583,24 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
+
         if (! $machineId) {
             $this->warn(
-                '[MQTT] Error message has missing or invalid machine_id.'
+                '[MQTT] Temperature message has missing or invalid machine_id.'
             );
 
             return;
         }
+
+        if (! Machine::whereKey($machineId)->exists()) {
+            $this->warn("[MQTT] Machine {$machineId} was not found.");
+
+            return;
+        }
+
         $temperature = $payload['temperature'] ?? null;
 
-        if (
-            ! $machineId
-            || ! is_numeric($temperature)
-        ) {
+        if (! is_numeric($temperature)) {
             $this->warn(
                 '[MQTT] Temperature message is invalid.'
             );
@@ -637,23 +650,15 @@ class MqttListenCommand extends Command
         }
 
         $machineId = $this->getMachineId($payload);
-        $temperature = $payload['temperature'] ?? null;
-
-        if (! $machineId || ! is_numeric($temperature)) {
-            $this->warn(
-                '[MQTT] Temperature message is invalid.'
-            );
-
-            return;
-        }
 
         if (! $machineId) {
             $this->warn(
-                '[MQTT] Error message has missing or invalid machine_id.'
+                '[MQTT] Inventory message has missing or invalid machine_id.'
             );
 
             return;
         }
+
         $slotCode = $payload['slot'] ?? null;
         $currentQty = $payload['current_qty'] ?? null;
 
@@ -820,6 +825,26 @@ class MqttListenCommand extends Command
 
             $this->error(
                 "[MQTT] Failed to mark dispense {$dispenseId}: "
+                    . $exception->getMessage()
+            );
+        }
+    }
+
+    /**
+     * Run one message handler so that a failure while processing a single
+     * message is logged instead of stopping the whole listener.
+     */
+    private function safely(string $label, callable $callback): void
+    {
+        try {
+            $callback();
+        } catch (Throwable $exception) {
+            Log::error("MQTT {$label} handler failed.", [
+                'error' => $exception->getMessage(),
+            ]);
+
+            $this->error(
+                "[MQTT] {$label} handler failed: "
                     . $exception->getMessage()
             );
         }
